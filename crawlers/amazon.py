@@ -3,6 +3,7 @@ from playwright.async_api import Page
 from models import VendorProfile, ProductItem
 from crawlers import BaseCrawler
 import logging
+import re
 
 class AmazonCrawler(BaseCrawler):
     """ The crawler implementation for the Amazon website. """
@@ -47,9 +48,38 @@ class AmazonCrawler(BaseCrawler):
                     link_element = card.locator("div div a").first
                     url_path = await link_element.get_attribute("href")
 
-                    ...
+                    product_id = await card.get_attribute("data-asin")
+                    price: float = 0.0
+                    price_element = card.locator(".a-price .a-offscreen").first
+
+                    if await price_element.count() > 0:
+                        price_text  = await price_element.inner_text()
+                        currency = re.sub(self.currency_regex, "", price_text)
+                        price_with_dot = price_text.replace(",", ".")
+                        clean_price = re.sub(self.price_regex, "", price_with_dot)
+                        price = float(clean_price)
+
                 except Exception as e:
                     self.logger.error(f"Exception while extracting {search_term}: {e}")
                     continue
 
-        pass
+                product = ProductItem(
+                    product_id=product_id or "N/A",
+                    name=title,
+                    product_url=url_path,
+                    price=price,
+                    currency=currency,
+                    vendor="PENDING"
+                )
+
+                yield product
+                items_found += 1
+
+            if items_found < limit:
+                next_button = self.page.locator("a.s-pagination-next").first
+                if await next_button.count() > 0 and await next_button.is_visible():
+                    self.logger.info("Navigating to next page...")
+                    await next_button.click()
+                    await self.page.wait_for_timeout(2000)
+                else:
+                    break

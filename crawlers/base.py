@@ -7,6 +7,8 @@ class BaseCrawler(ABC):
     def __init__(self, marketplace_name, version):
         self.marketplace_name = marketplace_name
         self.version = version
+        self.price_regex = "[^0-9.-]"
+        self.currency_regex = "[^0-9.,\s-]"
 
     @abstractmethod
     async def extract_search_items(self, search_term: str, limit: int = 50) -> AsyncIterator[ProductItem]:
