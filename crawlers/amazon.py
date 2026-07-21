@@ -1,6 +1,7 @@
 from typing import AsyncIterator
 from playwright.async_api import Page
 from models import VendorProfile, ProductItem
+from include import LocalizedSanitization
 from crawlers import BaseCrawler
 import logging
 import re
@@ -8,12 +9,12 @@ import re
 class AmazonCrawler(BaseCrawler):
     """ The crawler implementation for the Amazon website. """
 
-    def __init__(self, marketplace_name: str, version: str, page: Page, base_url: str) -> None:
+    def __init__(self, page: Page, base_url: str, sanitizer: LocalizedSanitization) -> None:
         """ Initialize the crawler with an initial page.
         The base_url param should have the specific localization identification in the domain, such as .br
         for Brazil, .de for Germany and so on.
         """
-        super().__init__(marketplace_name, version)
+        super().__init__(marketplace_name="Amazon", version="1.0.0", sanitizer=sanitizer)
         self.page = page
         self.base_url = base_url
         self.logger = logging.getLogger("AmazonCrawler")
@@ -28,7 +29,7 @@ class AmazonCrawler(BaseCrawler):
         await self.page.goto(f"{self.base_url}/s?k={search_term}")
         items_found: int = 0
         while items_found < limit:
-            await self.page.wait_for_selector("span[data-component-type='s-search-result']")
+            await self.page.wait_for_selector("div[data-component-type='s-search-result']")
 
             # Extract the items/eligible products that have been loaded
             products = await self.page.locator("div[data-component-type='s-search-result']").all()
@@ -49,23 +50,23 @@ class AmazonCrawler(BaseCrawler):
                     url_path = await link_element.get_attribute("href")
 
                     product_id = await card.get_attribute("data-asin")
-                    price: float = 0.0
+
+                    price = 0.0
+                    currency = None
                     price_element = card.locator(".a-price .a-offscreen").first
 
                     if await price_element.count() > 0:
-                        price_text  = await price_element.inner_text()
-                        currency = re.sub(self.currency_regex, "", price_text)
-                        price_with_dot = price_text.replace(",", ".")
-                        clean_price = re.sub(self.price_regex, "", price_with_dot)
-                        price = float(clean_price)
+                        price_text = await price_element.inner_text()
+                        currency = self.sanitizer.extract_currency_symbol(price_text)
+                        price = self.sanitizer.parse_price(price_text)
 
                 except Exception as e:
-                    self.logger.error(f"Exception while extracting {search_term}: {e}")
+                    print(f"Exception while extracting {search_term}: {e}")
                     continue
 
                 product = ProductItem(
                     product_id=product_id or "N/A",
-                    name=title,
+                    title=title,
                     product_url=url_path,
                     price=price,
                     currency=currency,

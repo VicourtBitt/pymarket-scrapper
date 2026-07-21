@@ -1,14 +1,14 @@
 from abc import ABC, abstractmethod
 from typing import AsyncIterator
 from models import VendorProfile, ProductItem
+from include import LocalizedSanitization
 
 class BaseCrawler(ABC):
     """ The abstract interface that most specialized crawlers must follow. """
-    def __init__(self, marketplace_name, version):
+    def __init__(self, marketplace_name, version, sanitizer: LocalizedSanitization):
         self.marketplace_name = marketplace_name
         self.version = version
-        self.price_regex = "[^0-9.-]"
-        self.currency_regex = "[^0-9.,\s-]"
+        self.sanitizer = sanitizer
 
     @abstractmethod
     async def extract_search_items(self, search_term: str, limit: int = 50) -> AsyncIterator[ProductItem]:
