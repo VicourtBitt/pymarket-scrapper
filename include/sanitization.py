@@ -14,6 +14,7 @@ class LocalizedSanitization:
         self.numeric_regex = re.compile(
             rf"[^\d\-{re.escape(self.decimal_separator)}{re.escape(self.thousands_separator)}]"
         )
+        self.currency_regex = re.compile(r"([$€£¥₹₽¢₩₪₫฿]|R\$|[A-Z]{3})")
         self.logger = logging.getLogger("sanitization")
 
     def parse_price(self, raw_price: str) -> float:
@@ -34,6 +35,20 @@ class LocalizedSanitization:
         except ValueError:
             self.logger.warning(f"Warning: Could not parse price '{raw_price}'")
             return 0.0
+
+    def extract_currency_symbol(self, raw_price: str) -> Optional[str]:
+        """
+        Extracts the currency symbol or code from a price string.
+        Examples:
+            '$1,234.50' -> '$'
+            '100 USD' -> 'USD'
+            'R$ 50,00' -> 'R$'
+        """
+        if not raw_price:
+            return None
+
+        match = self.currency_regex.search(raw_price)
+        return match.group(1) if match else None
 
     def extract_vendor_id(self, url: str) -> Optional[str]:
         """ Example of another localized extraction: finding vendor IDs from URLs. """
