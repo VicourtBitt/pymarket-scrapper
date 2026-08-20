@@ -1,6 +1,7 @@
 import duckdb
 from typing import AsyncIterator, List, Generic, TypeVar
 from pydantic import BaseModel
+import json
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -34,7 +35,7 @@ class SQLFilter(Generic[T]):
         if not batch:
             return []
 
-            # 1. Map Pydantic field types to DuckDB SQL types
+         # 1. Map Pydantic field types to DuckDB SQL types
         type_mapping = {
             int: "BIGINT",
             float: "DOUBLE",
@@ -45,8 +46,6 @@ class SQLFilter(Generic[T]):
         # 2. Extract column definitions directly from the Pydantic model class
         col_defs = []
         for field_name, field_info in self.model_class.model_fields.items():
-            # Get the base type, unwrapping Optionals if necessary
-            # e.g. Optional[float] -> float
             field_type = field_info.annotation
 
             # Simple unwrap for Optional types (Union[type, NoneType])
@@ -66,23 +65,39 @@ class SQLFilter(Generic[T]):
         items_dict = [item.model_dump() for item in batch]
         columns = list(items_dict[0].keys())
 
+        # 4.5 Ensure dicts/lists are stringified before hitting DuckDB
+        for item in items_dict:
+            for k, v in item.items():
+                if isinstance(v, (dict, list)):
+                    item[k] = json.dumps(v)
+
         # 5. Insert the batch using executemany for high performance
         insert_query = f"INSERT INTO batch_table VALUES ({', '.join(['?'] * len(columns))})"
         values_list = [list(item.values()) for item in items_dict]
         self.conn.executemany(insert_query, values_list)
 
-        # 5. Run the user's custom SQL query
+        # 6. Run the user's custom SQL query
         query = f"SELECT * FROM batch_table WHERE {self.where_clause}"
 
         try:
             result = self.conn.execute(query)
 
-            # 4. Map the SQL results back into our Pydantic Models safely
-            columns = [desc[0] for desc in result.description]
+            # 7. Map the SQL results back into our Pydantic Models safely
+            res_columns = [desc[0] for desc in result.description]
             filtered_items = []
 
             for row in result.fetchall():
-                row_dict = dict(zip(columns, row))
+                row_dict = dict(zip(res_columns, row))
+
+                # SAFE RE-HYDRATION: Blindly parse JSON-like strings back to dicts/lists
+                for k, v in row_dict.items():
+                    if isinstance(v, str) and (
+                            (v.startswith('{') and v.endswith('}')) or (v.startswith('[') and v.endswith(']'))):
+                        try:
+                            row_dict[k] = json.loads(v)
+                        except json.JSONDecodeError:
+                            pass
+
                 filtered_items.append(self.model_class(**row_dict))
 
             return filtered_items

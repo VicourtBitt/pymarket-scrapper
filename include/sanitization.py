@@ -8,13 +8,14 @@ class LocalizedSanitization:
     Can be configured per region (e.g., US vs Brazil number formats).
     """
 
-    def __init__(self, decimal_separator: str = ".", thousands_separator: str = ","):
+    def __init__(self, decimal_separator: str = ".", thousands_separator: str = ",", currency_fallback: str = "") -> None:
         self.decimal_separator = decimal_separator
         self.thousands_separator = thousands_separator
         self.numeric_regex = re.compile(
             rf"[^\d\-{re.escape(self.decimal_separator)}{re.escape(self.thousands_separator)}]"
         )
         self.currency_regex = re.compile(r"([$€£¥₹₽¢₩₪₫฿]|R\$|[A-Z]{3})")
+        self.default_currency_fallback = currency_fallback
         self.logger = logging.getLogger("sanitization")
 
     def parse_price(self, raw_price: str) -> float:

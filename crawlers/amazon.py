@@ -4,7 +4,15 @@ from models import VendorProfile, ProductItem
 from include import LocalizedSanitization
 from crawlers import BaseCrawler
 import logging
-import re
+from enum import Enum
+
+class AmazonSortFilter(Enum):
+    BEST_SELLERS = "exact-aware-popularity-rank"
+    PRICE_ASC = "price-asc-rank"
+    PRICE_DESC = "price-desc-rank"
+    REVIEWS = "review-rank"
+    NEWEST = "date-desc-rank"
+    RELEVANCE = "relevanceblender"
 
 class AmazonCrawler(BaseCrawler):
     """ The crawler implementation for the Amazon website. """
@@ -20,13 +28,19 @@ class AmazonCrawler(BaseCrawler):
         self.logger = logging.getLogger("AmazonCrawler")
 
     async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
-        pass
+        self.logger.info(f"Extracting vendor profile from {vendor_url}")
 
-    async def extract_search_items(self, search_term: str, limit: int = 50) -> AsyncIterator[ProductItem]:
+    async def extract_search_items(self, search_term: str, limit: int = 50, sort_filter: AmazonSortFilter = None) -> AsyncIterator[ProductItem]:
         self.logger.info(f"Initializing the extraction of {search_term} from Amazon")
 
+        # Construct URL with optional sort filter
+        search_url = f"{self.base_url}/s?k={search_term}"
+        if sort_filter:
+            search_url += f"&s={sort_filter.value}"
+            self.logger.info(f"Applying sort filter: {sort_filter.name}")
+
         # Going into our search page
-        await self.page.goto(f"{self.base_url}/s?k={search_term}")
+        await self.page.goto(f"{search_url}")
         items_found: int = 0
         while items_found < limit:
             await self.page.wait_for_selector("div[data-component-type='s-search-result']")
@@ -41,6 +55,11 @@ class AmazonCrawler(BaseCrawler):
                 if items_found >= limit:
                     self.logger.info("The limit has been achieved. Breaking the extraction loop.")
                     break
+
+                sponsored_tag = card.locator("div.a-row.a-spacing-micro").first
+                if await sponsored_tag.count() > 0:
+                    self.logger.info(f"Skipping sponsored/advertising product.")
+                    continue
 
                 try:
                     title_element = card.locator("a h2 span").first
@@ -67,10 +86,10 @@ class AmazonCrawler(BaseCrawler):
                 product = ProductItem(
                     product_id=product_id or "N/A",
                     title=title,
-                    product_url=url_path,
+                    url=url_path,
                     price=price,
-                    currency=currency,
-                    vendor="PENDING"
+                    currency=currency or self.sanitizer.default_currency_fallback,
+                    vendor_id=None
                 )
 
                 yield product
