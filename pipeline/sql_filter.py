@@ -11,7 +11,7 @@ class SQLFilter(Generic[T]):
     and applies a custom SQL WHERE clause to filter them dynamically.
     """
 
-    def __init__(self, model_class: type[T], where_clause: str):
+    def __init__(self, model_class: type[T], where_clause: str) -> None:
         self.model_class = model_class
         self.where_clause = where_clause
         self.conn = duckdb.connect(':memory:')
@@ -105,3 +105,7 @@ class SQLFilter(Generic[T]):
         except Exception as e:
             print(f"SQL Filter Error on query [{query}]: {e}")
             return []
+
+    def close(self) -> None:
+        """Close the in-memory DuckDB connection."""
+        self.conn.close()

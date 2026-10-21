@@ -2,12 +2,14 @@ from typing import Callable, Dict, Any, Optional
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
-from models import VendorRecord, ProductRecord, Base
+from models import VendorRecord, ProductRecord
 
 IdentityResolver = Callable[[Dict[str, Any]], Optional[str]]
 
 class PostgreSQLSink:
-    def __init__(self, connection_url: str, identity_resolver: IdentityResolver = None):
+    def __init__(
+        self, connection_url: str, identity_resolver: IdentityResolver = None
+    ) -> None:
         """
         Initializes the connection to the DB and creates tables if they don't exist.
         """
@@ -15,9 +17,9 @@ class PostgreSQLSink:
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.identity_resolver = identity_resolver
 
-        # Auto-create tables (in production, use Alembic migrations)
-        # Ensure that models are defined in this scope before calling create_all
-        Base.metadata.create_all(bind=self.engine)
+    def close(self) -> None:
+        """Release pooled database connections."""
+        self.engine.dispose()
 
     def load_vendor(self, vendor_data: dict) -> None:
         """

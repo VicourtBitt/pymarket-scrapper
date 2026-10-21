@@ -10,7 +10,7 @@ class Deduplicator(Generic[T]):
     if their specified key_field has already been seen.
     """
 
-    def __init__(self, key_field: str):
+    def __init__(self, key_field: str) -> None:
         self.seen = set()
         self.key_field = key_field
 

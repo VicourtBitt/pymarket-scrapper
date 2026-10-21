@@ -1,52 +1,84 @@
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
+from urllib.parse import urlencode
 from playwright.async_api import Page
 from models import VendorProfile, ProductItem
 from include import LocalizedSanitization
 from crawlers import BaseCrawler
 import logging
 from enum import Enum
+from models.config import MarketplaceConfig
 
 class AmazonSortFilter(Enum):
-    BEST_SELLERS = "exact-aware-popularity-rank"
-    PRICE_ASC = "price-asc-rank"
-    PRICE_DESC = "price-desc-rank"
-    REVIEWS = "review-rank"
-    NEWEST = "date-desc-rank"
-    RELEVANCE = "relevanceblender"
+    """Compatibility names for configuration keys, not Amazon sort values."""
+    BEST_SELLERS = "best_sellers"
+    PRICE_ASC = "price_asc"
+    PRICE_DESC = "price_desc"
+    REVIEWS = "reviews"
+    NEWEST = "newest"
+    RELEVANCE = "relevance"
 
 class AmazonCrawler(BaseCrawler):
     """ The crawler implementation for the Amazon website. """
 
-    def __init__(self, page: Page, base_url: str, sanitizer: LocalizedSanitization) -> None:
-        """ Initialize the crawler with an initial page.
-        The base_url param should have the specific localization identification in the domain, such as .br
-        for Brazil, .de for Germany and so on.
-        """
-        super().__init__(marketplace_name="Amazon", version="1.0.0", sanitizer=sanitizer)
+    def __init__(self, page: Page, sanitizer: LocalizedSanitization, config: MarketplaceConfig) -> None:
+        """Initialize the crawler with injected Playwright and marketplace config."""
+        super().__init__(
+            marketplace_name=config.marketplace or "amazon",
+            version="1.0.0",
+            sanitizer=sanitizer,
+            config=config,
+        )
         self.page = page
-        self.base_url = base_url
         self.logger = logging.getLogger("AmazonCrawler")
 
-    async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
-        self.logger.info(f"Extracting vendor profile from {vendor_url}")
+    async def extract_vendor_info(self, vendor_url: str) -> dict:
+        """Vendor extraction is a separate roadmap component."""
+        raise NotImplementedError(
+            "Amazon vendor extraction requires AmazonVendorCrawler; "
+            "search crawling does not provide vendor data"
+        )
 
-    async def extract_search_items(self, search_term: str, limit: int = 50, sort_filter: AmazonSortFilter = None) -> AsyncIterator[ProductItem]:
+    async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
+        """Compatibility interface for callers of the previous API."""
+        self.logger.info("Extracting vendor profile from %s", vendor_url)
+        if False:
+            yield VendorProfile()
+
+    async def extract_search_items(
+        self, search_term: str, limit: int = 50,
+        sort_strategy: Optional[str] = None
+    ) -> AsyncIterator[ProductItem]:
         self.logger.info(f"Initializing the extraction of {search_term} from Amazon")
 
-        # Construct URL with optional sort filter
-        search_url = f"{self.base_url}/s?k={search_term}"
-        if sort_filter:
-            search_url += f"&s={sort_filter.value}"
-            self.logger.info(f"Applying sort filter: {sort_filter.name}")
+        if not self.config.base_url:
+            raise ValueError("Amazon marketplace configuration must define base_url")
+        query = {self.config.query_parameters.search_key: search_term}
+        if sort_strategy:
+            sort_name = (
+                sort_strategy.value
+                if isinstance(sort_strategy, AmazonSortFilter)
+                else str(sort_strategy).lower()
+            )
+            configured_sort = getattr(self.config.query_parameters.sort_values, sort_name, None)
+            if configured_sort is None:
+                raise ValueError(f"Sort filter is not configured: {sort_name}")
+            query[self.config.query_parameters.sort_key] = configured_sort
+            self.logger.info("Applying sort filter: %s", sort_name)
+        search_url = f"{self.config.base_url.rstrip('/')}?{urlencode(query)}"
 
         # Going into our search page
-        await self.page.goto(f"{search_url}")
+        await self.page.goto(search_url)
         items_found: int = 0
         while items_found < limit:
-            await self.page.wait_for_selector("div[data-component-type='s-search-result']")
+            selectors = self.config.search_page
+            try:
+                await self.page.wait_for_selector(selectors.product_card)
+            except Exception as exc:
+                self.logger.warning("Product cards unavailable: %s", exc)
+                break
 
             # Extract the items/eligible products that have been loaded
-            products = await self.page.locator("div[data-component-type='s-search-result']").all()
+            products = await self.page.locator(selectors.product_card).all()
             if not products:
                 self.logger.info("No more products in that page.")
                 break
@@ -56,23 +88,23 @@ class AmazonCrawler(BaseCrawler):
                     self.logger.info("The limit has been achieved. Breaking the extraction loop.")
                     break
 
-                sponsored_tag = card.locator("div.a-row.a-spacing-micro").first
+                sponsored_tag = card.locator(selectors.sponsored_ad_tag).first
                 if await sponsored_tag.count() > 0:
                     self.logger.info(f"Skipping sponsored/advertising product.")
                     continue
 
                 try:
-                    title_element = card.locator("a h2 span").first
+                    title_element = card.locator(selectors.title).first
                     title = await title_element.inner_text()
 
-                    link_element = card.locator("div div a").first
+                    link_element = card.locator(selectors.url).first
                     url_path = await link_element.get_attribute("href")
 
-                    product_id = await card.get_attribute("data-asin")
+                    product_id = await card.get_attribute(selectors.id_attribute)
 
                     price = 0.0
                     currency = None
-                    price_element = card.locator(".a-price .a-offscreen").first
+                    price_element = card.locator(selectors.price).first
 
                     if await price_element.count() > 0:
                         price_text = await price_element.inner_text()
@@ -96,7 +128,7 @@ class AmazonCrawler(BaseCrawler):
                 items_found += 1
 
             if items_found < limit:
-                next_button = self.page.locator("a.s-pagination-next").first
+                next_button = self.page.locator(selectors.next_page_button).first
                 if await next_button.count() > 0 and await next_button.is_visible():
                     self.logger.info("Navigating to next page...")
                     await next_button.click()

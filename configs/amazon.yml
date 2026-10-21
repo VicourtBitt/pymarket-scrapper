@@ -1,0 +1,22 @@
+marketplace: amazon
+base_url: https://www.amazon.com.br/s
+query_parameters:
+  search_key: k
+  sort_key: s
+  sort_values:
+    best_sellers: exact-aware-popularity-rank
+    price_asc: price-asc-rank
+    price_desc: price-desc-rank
+    reviews: review-rank
+    newest: date-desc-rank
+    relevance: relevanceblender
+search_page:
+  product_card: "div[data-component-type='s-search-result']"
+  sponsored_ad_tag: "div.a-row.a-spacing-micro"
+  title: "a h2 span"
+  url: "div div a"
+  price: ".a-price .a-offscreen"
+  id_attribute: "data-asin"
+  next_page_button: "a.s-pagination-next"
+vendor_page:
+  name: ".vendor-name"

@@ -4,3 +4,19 @@ The fundamental part of turning the data extraction easier relies on isolating t
 
 # pymarket-scrapper
 A modular template for marketplace web scraping with support for platforms like Amazon and Mercado Livre. Provides reusable scraper components, database models, and a scalable foundation for collecting, storing, and analyzing marketplace data.
+
+## Marketplace configuration
+
+Marketplace definitions are loaded by key from an explicitly supplied directory:
+
+```python
+from pathlib import Path
+from models.config import MarketplaceConfig
+
+config = MarketplaceConfig.from_marketplace("amazon", Path("configs"))
+```
+
+The canonical filename is `configs/<marketplace>.yml`. The application accepts
+`MARKETPLACE` and `MARKETPLACE_CONFIG_DIR` environment variables; the latter
+defaults to `configs` only at the application boundary. Selectors, URL, and
+query/sort parameter names are read from the validated configuration.
