@@ -24,6 +24,14 @@ To maintain a scalable, enterprise-grade framework, all code must adhere to the 
 
 ## 3. Immediate Next Steps (Sprint 1)
 
+### 3.0 Extraction persistence schema (implemented)
+SQLAlchemy declarative models now define extraction runs/searches, canonical
+marketplace-scoped products, and immutable product observations. Identifiers
+remain strings for compatibility with `ProductItem` and the existing sink;
+schema evolution is managed by the initial Alembic revision rather than
+`Base.metadata.create_all()`. Sink/run lifecycle integration is the next
+increment.
+
 ### 3.1. Delegated Vendor Extraction & Hashmap Deduplication
 **Goal:** Extract vendor details without making duplicate HTTP requests for products sold by the same vendor.
 *   **Architecture:**

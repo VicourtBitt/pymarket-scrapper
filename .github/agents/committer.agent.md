@@ -14,13 +14,15 @@ Use exactly these formats:
 - Commit message: `[<nature>] <files/general-logic>: <descriptive-message>`
 - Branch: `[<nature>]/[<what'll-be-fixed-or-made>]`
 
-Allowed nature values and meanings:
+Allowed nature flags and meanings:
 
-- `Fix` (fix)
-- `Refactoring` (ref)
-- `Implementation` (imp)
-- `Migration` (mig)
-- `Tests` (test)
-- `Setup` (setup)
+- `fix` (fix)
+- `dev` (development)
+- `ref` (refactoring)
+- `mig` (migration)
+- `imp` (implementation)
+- `doc` (documentation)
+- `test` (tests)
+- `setup` (setup)
 
 When creating a commit, include the required `Co-authored-by` trailer.
