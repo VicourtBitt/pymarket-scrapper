@@ -29,7 +29,7 @@ class AmazonCrawler(BaseCrawler):
             config=config,
         )
         self.page = page
-        self.logger = logging.getLogger("AmazonCrawler")
+        self.logger = logging.getLogger("pymarket_scrapper.crawlers.amazon")
 
     async def extract_vendor_info(self, vendor_url: str) -> dict:
         """Vendor extraction is a separate roadmap component."""
@@ -112,7 +112,9 @@ class AmazonCrawler(BaseCrawler):
                         price = self.sanitizer.parse_price(price_text)
 
                 except Exception as e:
-                    print(f"Exception while extracting {search_term}: {e}")
+                    self.logger.exception(
+                        "Exception while extracting %s", search_term
+                    )
                     continue
 
                 product = ProductItem(

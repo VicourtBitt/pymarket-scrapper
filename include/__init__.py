@@ -1,1 +1,2 @@
 from include.sanitization import LocalizedSanitization
+from include.log_config import configure_logging

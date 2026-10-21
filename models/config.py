@@ -19,6 +19,17 @@ class QueryParameters(BaseModel):
     sort_key: str
     sort_values: SortValues
 
+
+class ProductFilter(BaseModel):
+    """Validated product-job filter; intentionally not an arbitrary SQL fragment."""
+
+    title_contains: Optional[str] = None
+
+    def as_sql(self) -> tuple[str, list[str]]:
+        if self.title_contains is None:
+            return "TRUE", []
+        return "title ILIKE ?", [f"%{self.title_contains}%"]
+
 class SearchPageSelectors(BaseModel):
     model_config = ConfigDict(extra='allow')
     product_card: str
@@ -28,6 +39,7 @@ class SearchPageSelectors(BaseModel):
     price: str
     id_attribute: str
     next_page_button: str
+    vendor_url: Optional[str] = None
 
 class VendorPageSelectors(BaseModel):
     model_config = ConfigDict(extra='allow')
