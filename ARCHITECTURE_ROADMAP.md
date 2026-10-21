@@ -31,6 +31,10 @@ To maintain a scalable, enterprise-grade framework, all code must adhere to the 
     *   Implement an in-memory Hashmap (`vendor_cache = {}`) inside the orchestrator.
     *   **Flow:** Extract Product -> Check `vendor_id` in `vendor_cache`. If MISSING -> delegate `page` to `AmazonVendorCrawler.extract_profile(url)` -> UPSERT vendor -> Cache Vendor ID -> UPSERT Product.
 
+    > **Current implementation note:** Vendor extraction, external-link/external_id
+    > preservation, and vendor cache/persistence orchestration are intentionally
+    > deferred until the vendor model and extraction contract are complete.
+
 ### 3.2. Formalize the Pipeline Interface
 **Goal:** Replace the manual chaining in `main.py` with a declarative pipeline engine.
 *   **Architecture:** 
