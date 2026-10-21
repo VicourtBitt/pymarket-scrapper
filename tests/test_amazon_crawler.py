@@ -12,9 +12,15 @@ from models.config import MarketplaceConfig
 
 
 class FakeLocator:
-    def __init__(self, values: dict[str, Any] | None = None, count: int = 1) -> None:
+    def __init__(
+        self,
+        values: dict[str, Any] | None = None,
+        count: int = 1,
+        used_selectors: list[str] | None = None,
+    ) -> None:
         self.values = values or {}
         self._count = count
+        self.used_selectors = used_selectors
 
     @property
     def first(self) -> "FakeLocator":
@@ -23,10 +29,17 @@ class FakeLocator:
     async def count(self) -> int:
         return self._count
 
+    async def all(self) -> list["FakeLocator"]:
+        return [self]
+
     def locator(self, selector: str) -> "FakeLocator":
+        if self.used_selectors is not None:
+            self.used_selectors.append(selector)
         if selector not in self.values:
-            return FakeLocator(count=0)
-        return FakeLocator(self.values[selector], self._count)
+            return FakeLocator(count=0, used_selectors=self.used_selectors)
+        return FakeLocator(
+            self.values[selector], self._count, self.used_selectors
+        )
 
     async def inner_text(self) -> str:
         return str(self.values.get("text", ""))
@@ -50,7 +63,8 @@ class FakePage:
                 ".custom-url": {"href": "/dp/abc"},
                 ".custom-price": {"text": "R$ 12,50"},
                 "data-custom-id": "ABC",
-            }
+            },
+            used_selectors=self.used_selectors,
         )
 
     async def goto(self, url: str) -> None:
@@ -62,7 +76,11 @@ class FakePage:
     def locator(self, selector: str) -> FakeLocator:
         self.used_selectors.append(selector)
         if selector == ".custom-card":
-            return FakeLocator(count=1, values=self.card.values)
+            return FakeLocator(
+                count=1,
+                values=self.card.values,
+                used_selectors=self.used_selectors,
+            )
         return FakeLocator(count=0)
 
     async def wait_for_timeout(self, milliseconds: int) -> None:
