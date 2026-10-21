@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Dict, Any, Optional
+from typing import Any, Callable, Dict, Optional
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
@@ -10,11 +10,22 @@ logger = logging.getLogger("pymarket_scrapper.pipeline.db_sink")
 
 class PostgreSQLSink:
     def __init__(
-        self, connection_url: str, identity_resolver: IdentityResolver = None
+        self,
+        connection_url: str,
+        identity_resolver: Optional[IdentityResolver] = None,
+        *,
+        marketplace: str,
     ) -> None:
         """
-        Initializes the connection to the DB and creates tables if they don't exist.
+        Initialize the sink for one explicit marketplace.
+
+        ``marketplace`` is deliberately required.  A missing marketplace must
+        fail at construction time rather than turning a production row into an
+        ambiguous ``unknown`` row.
         """
+        if not marketplace or not marketplace.strip():
+            raise ValueError("marketplace must be a non-empty string")
+        self.marketplace = marketplace.strip()
         self.engine = create_engine(connection_url, echo=False, pool_size=5, max_overflow=10)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.identity_resolver = identity_resolver
@@ -47,7 +58,7 @@ class PostgreSQLSink:
         stmt = insert(VendorRecord).values(
             vendor_id=vendor_data['vendor_id'],
             name=vendor_data['name'],
-            url=str(vendor_data.get('url', '')),
+            url=vendor_data.get("url"),
             extracted_emails=vendor_data.get('extracted_emails', []),
             extracted_phones=vendor_data.get('extracted_phones', []),
             external_id=vendor_data.get('external_id'),
@@ -71,20 +82,23 @@ class PostgreSQLSink:
                 logger.exception("Unable to persist vendor %s", vendor_data.get("vendor_id"))
                 raise
 
-    def load_product(self, product_data: dict) -> None:
+    def load_product(self, product_data: Dict[str, Any]) -> None:
         """
         Performs an UPSERT on the product record.
         """
         stmt = insert(ProductRecord).values(
             product_id=product_data['product_id'],
+            marketplace=self.marketplace,
+            external_product_id=product_data.get('external_id'),
             title=product_data['title'],
-            url=str(product_data['url']),
+            url=product_data.get("url"),
             price=product_data.get('price'),
+            currency=product_data.get('currency'),
             vendor_id=product_data['vendor_id'],
             metadata_blob=product_data.get('metadata', {})
         )
 
-        update_dict = {c.name: c for c in stmt.excluded if not c.primary_key}
+        update_dict = {c.name: c for c in stmt.excluded if c.name != "product_id"}
         upsert_stmt = stmt.on_conflict_do_update(
             index_elements=['product_id'],
             set_=update_dict

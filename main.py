@@ -33,7 +33,11 @@ async def main() -> None:
             return f"ERP_PARTNER_{vendor_data['vendor_id']}"
         return None
 
-    db_sink = PostgreSQLSink(connection_url=db_url, identity_resolver=erp_matcher)
+    db_sink = PostgreSQLSink(
+        connection_url=db_url,
+        identity_resolver=erp_matcher,
+        marketplace=marketplace,
+    )
     try:
         sql_filter = SQLFilter[ProductItem](
             model_class=ProductItem,
