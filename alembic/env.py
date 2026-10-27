@@ -15,54 +15,28 @@ from urllib.parse import quote_plus
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from include import load_environment
 from models.database import Base
 
 config = context.config
+load_environment()
 
 
-def _dotenv_values(path: Path) -> Dict[str, str]:
-    """Read simple ``KEY=VALUE`` entries without exposing their values.
-
-    ``python-dotenv`` is not an application dependency, and Alembic is often
-    invoked directly rather than through Docker Compose.  This intentionally
-    small reader supports the existing repository format and does not replace
-    values already supplied by the process environment.
-    """
-    values: Dict[str, str] = {}
-    try:
-        if not path.is_file():
-            return values
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped: str = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            name, value = stripped.split("=", 1)
-            name = name.strip()
-            if name in {"DATABASE_URL", "DB_USER", "DB_PASS", "DB_NAME"}:
-                values[name] = value.strip().strip("\"'")
-    except (OSError, UnicodeError):
-        # Environment variables remain the authoritative configuration.
-        return {}
-    return values
-
-
-def _configuration_value(name: str, dotenv: Dict[str, str]) -> Optional[str]:
-    """Return a non-empty process value, then a non-empty local dotenv value."""
-    value: Optional[str] = os.getenv(name) or dotenv.get(name)
+def _configuration_value(name: str) -> Optional[str]:
+    """Return a non-empty environment value."""
+    value: Optional[str] = os.getenv(name)
     return value.strip() if value and value.strip() else None
 
 
 def _database_url() -> str:
     """Resolve a SQLAlchemy URL without logging credentials."""
-    config_path: Path = Path(config.config_file_name or "alembic.ini")
-    dotenv: Dict[str, str] = _dotenv_values(config_path.resolve().parent / ".env")
-    explicit_url: Optional[str] = _configuration_value("DATABASE_URL", dotenv)
+    explicit_url: Optional[str] = _configuration_value("DATABASE_URL")
     if explicit_url:
         return explicit_url
 
-    user: Optional[str] = _configuration_value("DB_USER", dotenv)
-    password: Optional[str] = _configuration_value("DB_PASS", dotenv)
-    database: Optional[str] = _configuration_value("DB_NAME", dotenv)
+    user: Optional[str] = _configuration_value("DB_USER")
+    password: Optional[str] = _configuration_value("DB_PASS")
+    database: Optional[str] = _configuration_value("DB_NAME")
     if user and password and database:
         return (
             "postgresql+psycopg2://"

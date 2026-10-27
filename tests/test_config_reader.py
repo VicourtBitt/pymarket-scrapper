@@ -110,3 +110,42 @@ def test_marketplace_loader_rejects_config_symlink_outside_root(tmp_path: Path) 
 
     with pytest.raises(ConfigFileError, match="inside the configured directory"):
         MarketplaceConfigFactory.from_marketplace("amazon", link)
+
+
+def test_amazon_config_exposes_detail_and_vendor_selectors() -> None:
+    config = MarketplaceConfigFactory.from_marketplace("amazon", Path("configs"))
+
+    assert config.product_page is not None
+    assert config.product_page.title == "#productTitle"
+    assert config.product_page.price_whole == ".a-price-whole"
+    assert config.product_page.price_decimal == ".a-price-decimal"
+    assert config.product_page.price_fraction == ".a-price-fraction"
+    assert (
+        config.product_page.merchant_vendor_id
+        == "#merchantInfoFeature_feature_div[data-csa-c-asin]"
+    )
+    assert config.product_page.merchant_vendor_link == "#merchantInfoFeature_feature_div a"
+    assert config.product_page.details_row == ".prodDetTable tr"
+    assert config.product_page.details_cell == ".prodDetTable tr td"
+    assert config.product_page.description == "#productDescription"
+
+    assert config.vendor_page.storefront_href == "#seller_info_storefront_link a"
+    assert (
+        config.vendor_page.seller_info_row
+        == "#page-section-detail-seller-info div.a-row.a-spacing-none"
+    )
+    assert (
+        config.vendor_page.seller_info_key
+        == "#page-section-detail-seller-info div.a-row.a-spacing-none span.a-text-bold"
+    )
+    assert (
+        config.vendor_page.seller_info_value
+        == "#page-section-detail-seller-info div.a-row.a-spacing-none span:not(.a-text-bold)"
+    )
+
+    assert config.vendor_catalog_page is not None
+    assert (
+        config.vendor_catalog_page.product_card
+        == 'div[role="list_item"][data-asin]'
+    )
+    assert config.vendor_catalog_page.product_id_attribute == "data-asin"

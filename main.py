@@ -6,7 +6,7 @@ from typing import Any, Optional
 from playwright.async_api import async_playwright
 
 from crawlers import AmazonCrawler
-from include import LocalizedSanitization
+from include import LocalizedSanitization, load_environment
 from include import configure_logging
 from models import ProductItem
 from models.config import MarketplaceConfig, ProductFilter
@@ -14,6 +14,7 @@ from pipeline import Deduplicator, Pipeline, PostgreSQLSink, SQLFilter
 
 
 async def main() -> None:
+    load_environment()
     logger = configure_logging(os.getenv("LOG_DIRECTORY", "logs"))
     marketplace: str = os.getenv("MARKETPLACE", "amazon")
     configs_dir: Path = Path(os.getenv("MARKETPLACE_CONFIG_DIR", "configs"))

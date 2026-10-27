@@ -128,3 +128,191 @@ vendor_page:
     assert ".custom-card" in page.used_selectors
     assert ".custom-title" in page.used_selectors
     assert ".custom-sponsored" in page.used_selectors
+
+
+class DetailLocator:
+    def __init__(
+        self,
+        text: str = "",
+        attributes: dict[str, str] | None = None,
+        children: dict[str, list["DetailLocator"]] | None = None,
+        html: str | None = None,
+    ) -> None:
+        self.text = text
+        self.attributes = attributes or {}
+        self.children = children or {}
+        self.html = html
+
+    @property
+    def first(self) -> "DetailLocator":
+        return self
+
+    async def count(self) -> int:
+        return 1
+
+    async def all(self) -> list["DetailLocator"]:
+        return [self]
+
+    def locator(self, selector: str) -> "DetailLocator":
+        matches = self.children.get(selector, [])
+        if not matches:
+            return EmptyLocator()
+        return CollectionLocator(matches)
+
+    async def inner_text(self) -> str:
+        return self.text
+
+    async def inner_html(self) -> str:
+        return self.html or self.text
+
+    async def get_attribute(self, name: str) -> str | None:
+        return self.attributes.get(name)
+
+
+class EmptyLocator(DetailLocator):
+    async def count(self) -> int:
+        return 0
+
+    async def all(self) -> list["DetailLocator"]:
+        return []
+
+
+class DetailPage:
+    def __init__(self, values: dict[str, DetailLocator | list[DetailLocator]]) -> None:
+        self.values = values
+        self.urls: list[str] = []
+
+    async def goto(self, url: str) -> None:
+        self.urls.append(url)
+
+    def locator(self, selector: str) -> DetailLocator:
+        value = self.values.get(selector)
+        if isinstance(value, list):
+            return CollectionLocator(value)
+        return value or EmptyLocator()
+
+
+class CollectionLocator(DetailLocator):
+    def __init__(self, values: list[DetailLocator]) -> None:
+        super().__init__()
+        self.values = values
+
+    async def count(self) -> int:
+        return len(self.values)
+
+    async def all(self) -> list[DetailLocator]:
+        return self.values
+
+    @property
+    def first(self) -> DetailLocator:
+        return self.values[0] if self.values else EmptyLocator()
+
+
+def detail_config() -> MarketplaceConfig:
+    return MarketplaceConfig.model_validate(
+        {
+            "marketplace": "amazon",
+            "query_parameters": {
+                "search_key": "q",
+                "sort_key": "s",
+                "sort_values": {"best_sellers": "best"},
+            },
+            "search_page": {
+                "product_card": ".card",
+                "sponsored_ad_tag": ".ad",
+                "title": ".title",
+                "url": "a",
+                "price": ".price",
+                "id_attribute": "data-asin",
+                "next_page_button": ".next",
+            },
+            "vendor_page": {
+                "name": ".vendor-name",
+                "storefront_href": "#storefront a",
+                "seller_info_row": ".seller-row",
+                "seller_info_key": ".key",
+                "seller_info_value": ".value",
+            },
+            "product_page": {
+                "title": "#title",
+                "price_whole": ".whole",
+                "price_decimal": ".decimal",
+                "price_fraction": ".fraction",
+                "merchant_vendor_id": "#merchant",
+                "details_row": ".detail-row",
+                "details_cell": "td",
+                "description": "#description",
+            },
+            "vendor_catalog_page": {
+                "product_card": ".catalog-card",
+                "product_id_attribute": "data-asin",
+            },
+        }
+    )
+
+
+def test_extracts_product_page_details() -> None:
+    row = DetailLocator(children={"td": [DetailLocator("Brand"), DetailLocator("Acme")]})
+    page = DetailPage(
+        {
+            "#title": DetailLocator("Configured product"),
+            ".whole": DetailLocator("1."),
+            ".decimal": DetailLocator(""),
+            ".fraction": DetailLocator("234,50"),
+            "#merchant": DetailLocator(attributes={"data-csa-c-asin": "SELLER1"}),
+            ".detail-row": [row],
+            "#description": DetailLocator(html="<p>Good <b>product</b></p><script>bad</script>"),
+        }
+    )
+    crawler = AmazonCrawler(
+        page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
+        detail_config(),
+    )
+
+    product = asyncio.run(crawler.extract_product_info("https://example.test/product"))
+
+    assert product["title"] == "Configured product"
+    assert product["price"] == 1234.5
+    assert product["vendor_id"] == "SELLER1"
+    assert product["details"] == {"Brand": "Acme"}
+    assert product["description"] == "Good product"
+
+
+def test_extracts_vendor_info_and_catalog() -> None:
+    seller_row = DetailLocator(
+        children={".key": [DetailLocator("Ships from")], ".value": [DetailLocator("Acme")]}
+    )
+    card = DetailLocator(
+        attributes={"data-asin": "ASIN1"},
+        children={
+            ".title": [DetailLocator("Catalog product")],
+            "a": [DetailLocator(attributes={"href": "/dp/ASIN1"})],
+            ".price": [DetailLocator("R$ 10,00")],
+        },
+    )
+    page = DetailPage(
+        {
+            ".vendor-name": DetailLocator("Acme Store"),
+            "#storefront a": DetailLocator(attributes={"href": "/stores/acme"}),
+            ".seller-row": [seller_row],
+            ".catalog-card": [card],
+        }
+    )
+    crawler = AmazonCrawler(
+        page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
+        detail_config(),
+    )
+
+    vendor = asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+
+    async def collect() -> list[Any]:
+        return [item async for item in crawler.extract_vendor_catalog(
+            "https://example.test/vendor"
+        )]
+
+    products = asyncio.run(collect())
+    assert vendor["storefront_url"] == "/stores/acme"
+    assert vendor["seller_info"] == {"Ships from": "Acme"}
+    assert products[0].product_id == "ASIN1"
+    assert products[0].title == "Catalog product"
+    assert products[0].price == 10.0

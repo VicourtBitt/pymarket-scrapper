@@ -1,5 +1,7 @@
 marketplace: amazon
+
 base_url: https://www.amazon.com.br/s
+
 query_parameters:
   search_key: k
   sort_key: s
@@ -10,6 +12,7 @@ query_parameters:
     reviews: review-rank
     newest: date-desc-rank
     relevance: relevanceblender
+
 search_page:
   product_card: "div[data-component-type='s-search-result']"
   sponsored_ad_tag: "div.a-row.a-spacing-micro"
@@ -18,5 +21,32 @@ search_page:
   price: ".a-price .a-offscreen"
   id_attribute: "data-asin"
   next_page_button: "a.s-pagination-next"
+
 vendor_page:
   name: ".vendor-name"
+  storefront_href: "#seller_info_storefront_link a"
+  seller_info_row: "#page-section-detail-seller-info div.a-row.a-spacing-none"
+  seller_info_key: "#page-section-detail-seller-info div.a-row.a-spacing-none span.a-text-bold"
+  seller_info_value: "#page-section-detail-seller-info div.a-row.a-spacing-none span:not(.a-text-bold)"
+
+product_page:
+  title: "#productTitle"
+  price: "#priceblock_ourprice, #priceblock_dealprice"
+  price_whole: ".a-price-whole"
+  price_decimal: ".a-price-decimal"
+  price_fraction: ".a-price-fraction"
+  merchant_vendor_id: "#merchantInfoFeature_feature_div[data-csa-c-asin]"
+  merchant_vendor_link: "#merchantInfoFeature_feature_div a"
+  details_row: ".prodDetTable tr"
+  details_cell: ".prodDetTable tr td"
+  description: "#productDescription"
+  features: "#feature-bullets li span"
+  reviews:
+    review_card: "div[data-hook='review']"
+    title: "a[data-hook='review-title'] span"
+    rating: "i[data-hook='review-star-rating'] span"
+    text: "span[data-hook='review-body'] span"
+
+vendor_catalog_page:
+  product_card: "div[role=\"list_item\"][data-asin]"
+  product_id_attribute: "data-asin"
