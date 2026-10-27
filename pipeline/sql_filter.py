@@ -1,8 +1,11 @@
 import duckdb
-from typing import AsyncIterator, List, Generic, TypeVar, Optional
-from pydantic import BaseModel
 import json
 import logging
+from collections.abc import AsyncIterator
+from typing import Generic, Optional, TypeVar
+
+from pydantic import BaseModel
+
 from models.config import ProductFilter
 
 logger = logging.getLogger("pymarket_scrapper.pipeline.sql_filter")
@@ -10,15 +13,13 @@ logger = logging.getLogger("pymarket_scrapper.pipeline.sql_filter")
 T = TypeVar('T', bound=BaseModel)
 
 class SQLFilter(Generic[T]):
-    """
-    Accumulates yielded items into batches, loads them into DuckDB,
-    and applies a custom SQL WHERE clause to filter them dynamically.
-    """
+    """Filter Pydantic models in bounded in-memory DuckDB batches."""
 
     def __init__(
         self, model_class: type[T], where_clause: Optional[str] = None,
         filters: Optional[ProductFilter] = None,
     ) -> None:
+        """Initialize a filter from validated filters or a trusted SQL clause."""
         self.model_class = model_class
         if filters is not None:
             self.where_clause, self.parameters = filters.as_sql()
@@ -31,6 +32,19 @@ class SQLFilter(Generic[T]):
         self.conn = duckdb.connect(':memory:')
 
     async def process(self, stream: AsyncIterator[T], batch_size: int = 50) -> AsyncIterator[T]:
+        """Yield items matching the configured clause, batch by batch.
+
+        Args:
+            stream: Asynchronous model stream to filter.
+            batch_size: Number of models processed in one DuckDB batch.
+
+        Yields:
+            Models reconstructed from rows matching the SQL predicate.
+
+        Raises:
+            Exception: Propagates DuckDB or model-validation failures after
+                logging the failed query.
+        """
         batch = []
         async for item in stream:
             batch.append(item)

@@ -4,12 +4,10 @@ from models import ProductItem, VendorRecord
 from include.sanitization import LocalizedSanitization
 from models.config import MarketplaceConfig
 
+
 class BaseCrawler(ABC):
-    """
-    The abstract interface that all specialized crawlers must follow.
-    Now requires a configuration object.
-    """
-    
+    """Abstract interface for marketplace-specific asynchronous crawlers."""
+
     def __init__(
         self, 
         marketplace_name: str, 
@@ -17,6 +15,7 @@ class BaseCrawler(ABC):
         sanitizer: LocalizedSanitization,
         config: MarketplaceConfig
     ):
+        """Store the injected marketplace metadata and parsing services."""
         self.marketplace_name = marketplace_name
         self.version = version
         self.sanitizer = sanitizer
@@ -24,14 +23,26 @@ class BaseCrawler(ABC):
         
     @abstractmethod
     async def extract_search_items(self, search_term: str, limit: int = 50, sort_strategy: Optional[str] = None) -> AsyncIterator[ProductItem]:
-        """
-        Crawls a search page and YIELDS products asynchronously.
+        """Yield products from a marketplace search page.
+
+        Args:
+            search_term: Marketplace query string.
+            limit: Maximum number of products to yield.
+            sort_strategy: Optional marketplace-specific sort key.
+
+        Yields:
+            Marketplace product records.
         """
         pass
 
     @abstractmethod
     async def extract_vendor_info(self, vendor_url: str) -> dict:
-        """
-        Crawls a specific vendor's page and returns their raw dictionary data.
+        """Return raw vendor data extracted from a vendor page.
+
+        Args:
+            vendor_url: Vendor page URL.
+
+        Returns:
+            Marketplace-specific vendor fields as a dictionary.
         """
         pass

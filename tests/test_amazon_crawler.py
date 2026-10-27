@@ -60,7 +60,7 @@ class FakePage:
         self.card = FakeLocator(
             {
                 ".custom-title": {"text": "Configured title"},
-                ".custom-url": {"href": "/dp/abc"},
+                ".custom-url": {"href": "/dp/abc?tag=test#variant"},
                 ".custom-price": {"text": "R$ 12,50"},
                 "data-custom-id": "ABC",
             },
@@ -125,6 +125,7 @@ vendor_page:
 
     products = asyncio.run(collect())
     assert products[0].title == "Configured title"
+    assert str(products[0].url) == "https://example.test/dp/abc?tag=test#variant"
     assert ".custom-card" in page.used_selectors
     assert ".custom-title" in page.used_selectors
     assert ".custom-sponsored" in page.used_selectors
@@ -212,6 +213,7 @@ def detail_config() -> MarketplaceConfig:
     return MarketplaceConfig.model_validate(
         {
             "marketplace": "amazon",
+            "base_url": "https://example.test/s",
             "query_parameters": {
                 "search_key": "q",
                 "sort_key": "s",
@@ -269,8 +271,10 @@ def test_extracts_product_page_details() -> None:
         detail_config(),
     )
 
-    product = asyncio.run(crawler.extract_product_info("https://example.test/product"))
+    product = asyncio.run(crawler.extract_product_info("/dp/abc?tag=test#variant"))
 
+    assert page.urls == ["https://example.test/dp/abc?tag=test#variant"]
+    assert product["url"] == "https://example.test/dp/abc?tag=test#variant"
     assert product["title"] == "Configured product"
     assert product["price"] == 1234.5
     assert product["vendor_id"] == "SELLER1"

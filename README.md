@@ -20,3 +20,17 @@ The canonical filename is `configs/<marketplace>.yml`. The application accepts
 `MARKETPLACE` and `MARKETPLACE_CONFIG_DIR` environment variables; the latter
 defaults to `configs` only at the application boundary. Selectors, URL, and
 query/sort parameter names are read from the validated configuration.
+
+## Build the documentation
+
+Install the documentation dependency and build the local HTML site from the
+repository root:
+
+```bash
+python -m pip install -r requirements.txt
+python -m sphinx -W -b html docs docs/_build/html
+```
+
+Open `docs/_build/html/index.html` to view the generated documentation. The
+build imports the project modules but does not launch a browser, access the
+network, or connect to a database.

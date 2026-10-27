@@ -1,20 +1,27 @@
-from typing import AsyncIterator, TypeVar, Generic
+from collections.abc import AsyncIterator
+from typing import Generic, TypeVar
+
 from pydantic import BaseModel
 
 T = TypeVar('T', bound=BaseModel)
 
 
 class Deduplicator(Generic[T]):
-    """
-    Middleware that intercepts an async stream and drops items
-    if their specified key_field has already been seen.
-    """
+    """Drop repeated keyed models while preserving unkeyed models."""
 
     def __init__(self, key_field: str) -> None:
         self.seen = set()
         self.key_field = key_field
 
     async def process(self, stream: AsyncIterator[T]) -> AsyncIterator[T]:
+        """Yield the first item for each non-empty configured key.
+
+        Args:
+            stream: Asynchronous model stream to inspect.
+
+        Yields:
+            The first model for each key, plus models without a key.
+        """
         async for item in stream:
             # Dynamically get the ID (e.g., product_id or vendor_id)
             key = getattr(item, self.key_field, None)

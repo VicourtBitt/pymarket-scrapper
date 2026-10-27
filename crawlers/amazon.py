@@ -1,13 +1,15 @@
 from html.parser import HTMLParser
-from typing import AsyncIterator, Optional
-from urllib.parse import urlencode
-from playwright.async_api import Page
-from models import VendorProfile, ProductItem
-from include import LocalizedSanitization
-from crawlers import BaseCrawler
 import logging
 from enum import Enum
+from typing import AsyncIterator, Optional
+from urllib.parse import urlencode, urljoin
+
+from playwright.async_api import Page
+
+from include import LocalizedSanitization
+from models import ProductItem, VendorProfile
 from models.config import MarketplaceConfig
+from crawlers import BaseCrawler
 
 
 class _HtmlText(HTMLParser):
@@ -42,11 +44,20 @@ class AmazonSortFilter(Enum):
     NEWEST = "newest"
     RELEVANCE = "relevance"
 
+
 class AmazonCrawler(BaseCrawler):
-    """ The crawler implementation for the Amazon website. """
+    """Extract configured Amazon search, product, vendor, and catalog data."""
+
+    _DEFAULT_BASE_URL = "https://www.amazon.com.br/"
 
     def __init__(self, page: Page, sanitizer: LocalizedSanitization, config: MarketplaceConfig) -> None:
-        """Initialize the crawler with injected Playwright and marketplace config."""
+        """Initialize the crawler with injected browser and marketplace services.
+
+        Args:
+            page: Playwright page used for all navigation and locator queries.
+            sanitizer: Locale-aware parser for prices and marketplace IDs.
+            config: Validated selectors and URL/query configuration.
+        """
         super().__init__(
             marketplace_name=config.marketplace or "amazon",
             version="1.0.0",
@@ -56,8 +67,20 @@ class AmazonCrawler(BaseCrawler):
         self.page = page
         self.logger = logging.getLogger("pymarket_scrapper.crawlers.amazon")
 
+    def _normalize_product_url(self, product_url: str) -> str:
+        """Return an absolute product URL using the configured base URL."""
+        return urljoin(self.config.base_url or self._DEFAULT_BASE_URL, product_url)
+
     async def extract_vendor_info(self, vendor_url: str) -> dict:
-        """Extract the configured seller storefront and seller information."""
+        """Extract configured seller identity, storefront, and seller fields.
+
+        Args:
+            vendor_url: Vendor page URL to navigate to.
+
+        Returns:
+            Raw vendor fields including ``vendor_url``, ``name``,
+            ``storefront_url``, and ``seller_info``.
+        """
         selectors = self.config.vendor_page
         await self.page.goto(vendor_url)
 
@@ -85,19 +108,38 @@ class AmazonCrawler(BaseCrawler):
         }
 
     async def extract_product_info(self, product_url: str) -> dict:
-        """Extract product details from an Amazon product page."""
+        """Extract configured product details from an Amazon product page.
+
+        Args:
+            product_url: Relative or absolute product URL.
+
+        Returns:
+            Raw detail fields normalized for the workflow, including price,
+            vendor, description, features, and reviews.
+
+        Raises:
+            ValueError: If ``product_page`` is absent from the configuration.
+        """
         selectors = self.config.product_page
         if selectors is None:
             raise ValueError("Amazon marketplace configuration must define product_page")
 
-        await self.page.goto(product_url)
+        normalized_product_url = self._normalize_product_url(product_url)
+        await self.page.goto(normalized_product_url)
         title = await self._optional_text(selectors.title)
         price_text = await self._price_text(selectors)
         vendor_id = None
+        vendor_url = None
         if selectors.merchant_vendor_id:
             merchant = self.page.locator(selectors.merchant_vendor_id).first
             if await merchant.count() > 0:
                 vendor_id = await merchant.get_attribute("data-csa-c-asin")
+                if selectors.merchant_vendor_link:
+                    vendor_link = self.page.locator(selectors.merchant_vendor_link).first
+                    if await vendor_link.count() > 0:
+                        href = await vendor_link.get_attribute("href")
+                        if href:
+                            vendor_url = urljoin(normalized_product_url, href)
 
         details: dict[str, str] = {}
         if selectors.details_row:
@@ -114,7 +156,7 @@ class AmazonCrawler(BaseCrawler):
         features = await self._all_text(selectors.features)
         reviews = await self._extract_reviews(selectors.reviews)
         return {
-            "url": product_url,
+            "url": normalized_product_url,
             "title": title,
             "price": self.sanitizer.parse_price(price_text),
             "currency": (
@@ -122,6 +164,7 @@ class AmazonCrawler(BaseCrawler):
                 or self.sanitizer.default_currency_fallback
             ),
             "vendor_id": vendor_id,
+            "vendor_url": vendor_url,
             "details": details,
             "description": description,
             "features": features,
@@ -131,7 +174,18 @@ class AmazonCrawler(BaseCrawler):
     async def extract_vendor_catalog(
         self, vendor_url: str, limit: int = 50
     ) -> AsyncIterator[ProductItem]:
-        """Extract products listed on a vendor catalog page."""
+        """Yield products listed on a configured vendor catalog page.
+
+        Args:
+            vendor_url: Catalog or storefront URL to navigate to.
+            limit: Maximum number of catalog cards to inspect.
+
+        Yields:
+            Product records parsed from configured catalog cards.
+
+        Raises:
+            ValueError: If the catalog page or product-card selector is absent.
+        """
         selectors = self.config.vendor_catalog_page
         if selectors is None or not selectors.product_card:
             raise ValueError(
@@ -237,7 +291,14 @@ class AmazonCrawler(BaseCrawler):
         return (await self._optional_text(getattr(selectors, "price", None))) or ""
 
     async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
-        """Compatibility interface for callers of the previous API."""
+        """Retain the previous profile interface without emitting records.
+
+        Args:
+            vendor_url: Vendor URL recorded in the diagnostic log.
+
+        Yields:
+            No profiles; current workflow uses ``extract_vendor_info``.
+        """
         self.logger.info("Extracting vendor profile from %s", vendor_url)
         if False:
             yield VendorProfile()
@@ -246,6 +307,19 @@ class AmazonCrawler(BaseCrawler):
         self, search_term: str, limit: int = 50,
         sort_strategy: Optional[str] = None
     ) -> AsyncIterator[ProductItem]:
+        """Yield products from configured Amazon search result pages.
+
+        Args:
+            search_term: Marketplace search query.
+            limit: Maximum number of eligible products to yield.
+            sort_strategy: Configuration key or ``AmazonSortFilter`` value.
+
+        Yields:
+            Product records with normalized URLs, prices, currencies, and IDs.
+
+        Raises:
+            ValueError: If the base URL or requested sort is not configured.
+        """
         self.logger.info(f"Initializing the extraction of {search_term} from Amazon")
 
         if not self.config.base_url:
@@ -318,7 +392,7 @@ class AmazonCrawler(BaseCrawler):
                 product = ProductItem(
                     product_id=product_id or "N/A",
                     title=title,
-                    url=url_path,
+                    url=(self._normalize_product_url(url_path) if url_path else None),
                     price=price,
                     currency=currency or self.sanitizer.default_currency_fallback,
                     vendor_id=None

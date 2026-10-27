@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Callable, Dict, Optional
+
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
@@ -8,7 +9,10 @@ from models import VendorRecord, ProductRecord
 IdentityResolver = Callable[[Dict[str, Any]], Optional[str]]
 logger = logging.getLogger("pymarket_scrapper.pipeline.db_sink")
 
+
 class PostgreSQLSink:
+    """Persist vendors and products with PostgreSQL upserts."""
+
     def __init__(
         self,
         connection_url: str,
@@ -36,7 +40,14 @@ class PostgreSQLSink:
 
     def load_vendor(self, vendor_data: Dict[str, Any]) -> None:
         """
-        Executes the identity callback (if provided) and performs an UPSERT on the vendor.
+        Resolve an optional ERP identity and upsert one vendor.
+
+        Args:
+            vendor_data: Vendor fields including the required ``vendor_id``
+                and ``name`` keys.
+
+        Raises:
+            Exception: Propagates database failures after rolling back.
         """
         # 1. Execute Identity Resolution
         if self.identity_resolver:
@@ -84,7 +95,14 @@ class PostgreSQLSink:
 
     def load_product(self, product_data: Dict[str, Any]) -> None:
         """
-        Performs an UPSERT on the product record.
+        Upsert one product in the configured marketplace.
+
+        Args:
+            product_data: Product fields including ``product_id``, ``title``,
+                and ``vendor_id``.
+
+        Raises:
+            Exception: Propagates database failures after rolling back.
         """
         stmt = insert(ProductRecord).values(
             product_id=product_data['product_id'],
