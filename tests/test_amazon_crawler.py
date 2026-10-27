@@ -9,6 +9,7 @@ pytest.importorskip("playwright")
 from crawlers.amazon import AmazonCrawler
 from include import LocalizedSanitization
 from models.config import MarketplaceConfig
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 
 class FakeLocator:
@@ -67,7 +68,7 @@ class FakePage:
             used_selectors=self.used_selectors,
         )
 
-    async def goto(self, url: str) -> None:
+    async def goto(self, url: str, **kwargs: Any) -> None:
         assert "s=best" in url
 
     async def wait_for_selector(self, selector: str) -> None:
@@ -183,7 +184,7 @@ class DetailPage:
         self.values = values
         self.urls: list[str] = []
 
-    async def goto(self, url: str) -> None:
+    async def goto(self, url: str, **kwargs: Any) -> None:
         self.urls.append(url)
 
     def locator(self, selector: str) -> DetailLocator:
@@ -209,6 +210,22 @@ class CollectionLocator(DetailLocator):
         return self.values[0] if self.values else EmptyLocator()
 
 
+class NavigationPage(DetailPage):
+    def __init__(
+        self,
+        values: dict[str, DetailLocator | list[DetailLocator]],
+        timeout: bool = False,
+    ) -> None:
+        super().__init__(values)
+        self.navigation_calls: list[tuple[str, dict[str, Any]]] = []
+        self.timeout = timeout
+
+    async def goto(self, url: str, **kwargs: Any) -> None:
+        self.navigation_calls.append((url, kwargs))
+        if self.timeout:
+            raise PlaywrightTimeoutError("navigation timeout")
+
+
 def detail_config() -> MarketplaceConfig:
     return MarketplaceConfig.model_validate(
         {
@@ -231,9 +248,9 @@ def detail_config() -> MarketplaceConfig:
             "vendor_page": {
                 "name": ".vendor-name",
                 "storefront_href": "#storefront a",
-                "seller_info_row": ".seller-row",
-                "seller_info_key": ".key",
-                "seller_info_value": ".value",
+                "seller_info_row": "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none",
+                "seller_info_key": "span.a-text-bold",
+                "seller_info_value": "span:not(.a-text-bold)",
             },
             "product_page": {
                 "title": "#title",
@@ -283,9 +300,29 @@ def test_extracts_product_page_details() -> None:
 
 
 def test_extracts_vendor_info_and_catalog() -> None:
-    seller_row = DetailLocator(
-        children={".key": [DetailLocator("Ships from")], ".value": [DetailLocator("Acme")]}
-    )
+    seller_rows = [
+        DetailLocator(
+            children={
+                "span.a-text-bold": [DetailLocator("Nome Comercial:")],
+                "span:not(.a-text-bold)": [DetailLocator("TAZINHAMIX COMERCIO LTDA")],
+            }
+        ),
+        DetailLocator(
+            children={
+                "span.a-text-bold": [DetailLocator("CNPJ:")],
+                "span:not(.a-text-bold)": [DetailLocator("62.246.912/0001-03")],
+            }
+        ),
+        DetailLocator(
+            children={
+                "span.a-text-bold": [DetailLocator("Número de telefone:")],
+                "span:not(.a-text-bold)": [DetailLocator("31997606208")],
+            }
+        ),
+        DetailLocator(
+            children={"span.a-text-bold": [DetailLocator("Endereço:")]}
+        ),
+    ]
     card = DetailLocator(
         attributes={"data-asin": "ASIN1"},
         children={
@@ -298,7 +335,7 @@ def test_extracts_vendor_info_and_catalog() -> None:
         {
             ".vendor-name": DetailLocator("Acme Store"),
             "#storefront a": DetailLocator(attributes={"href": "/stores/acme"}),
-            ".seller-row": [seller_row],
+            "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none": seller_rows,
             ".catalog-card": [card],
         }
     )
@@ -315,8 +352,72 @@ def test_extracts_vendor_info_and_catalog() -> None:
         )]
 
     products = asyncio.run(collect())
-    assert vendor["storefront_url"] == "/stores/acme"
-    assert vendor["seller_info"] == {"Ships from": "Acme"}
+    assert vendor["storefront_url"] == "https://example.test/stores/acme"
+    assert vendor["seller_info"] == {
+        "Nome Comercial:": "TAZINHAMIX COMERCIO LTDA",
+        "CNPJ:": "62.246.912/0001-03",
+        "Número de telefone:": "31997606208",
+    }
     assert products[0].product_id == "ASIN1"
     assert products[0].title == "Catalog product"
     assert products[0].price == 10.0
+
+
+def test_vendor_and_catalog_navigation_wait_for_bounded_dom_ready() -> None:
+    card = DetailLocator(
+        attributes={"data-asin": "ASIN1"},
+        children={".title": [DetailLocator("Catalog product")]},
+    )
+    page = NavigationPage(
+        {
+            ".vendor-name": DetailLocator("Acme Store"),
+            ".catalog-card": [card],
+        }
+    )
+    crawler = AmazonCrawler(
+        page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
+        detail_config(),
+    )
+
+    asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+
+    async def collect() -> list[Any]:
+        return [item async for item in crawler.extract_vendor_catalog(
+            "https://example.test/store"
+        )]
+
+    asyncio.run(collect())
+
+    assert [call[1] for call in page.navigation_calls] == [
+        {"wait_until": "domcontentloaded", "timeout": 30_000},
+        {"wait_until": "domcontentloaded", "timeout": 30_000},
+    ]
+
+
+def test_navigation_timeout_keeps_extracting_seller_info() -> None:
+    seller_row = DetailLocator(
+        children={
+            "span.a-text-bold": [DetailLocator("CNPJ:")],
+            "span:not(.a-text-bold)": [DetailLocator("12.345.678/0001-90")],
+        }
+    )
+    page = NavigationPage(
+        {
+            ".vendor-name": DetailLocator("Acme Store"),
+            "#storefront a": DetailLocator(attributes={"href": "/stores/acme"}),
+            "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none": [
+                seller_row
+            ],
+        },
+        timeout=True,
+    )
+    crawler = AmazonCrawler(
+        page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
+        detail_config(),
+    )
+
+    vendor = asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+
+    assert vendor["name"] == "Acme Store"
+    assert vendor["storefront_url"] == "https://example.test/stores/acme"
+    assert vendor["seller_info"] == {"CNPJ:": "12.345.678/0001-90"}

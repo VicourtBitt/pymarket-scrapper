@@ -129,19 +129,16 @@ def test_amazon_config_exposes_detail_and_vendor_selectors() -> None:
     assert config.product_page.details_cell == ".prodDetTable tr td"
     assert config.product_page.description == "#productDescription"
 
-    assert config.vendor_page.storefront_href == "#seller_info_storefront_link a"
+    assert (
+        config.vendor_page.storefront_href
+        == "#seller-info-storefront-link a, #seller_info_storefront_link a"
+    )
     assert (
         config.vendor_page.seller_info_row
-        == "#page-section-detail-seller-info div.a-row.a-spacing-none"
+        == "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none"
     )
-    assert (
-        config.vendor_page.seller_info_key
-        == "#page-section-detail-seller-info div.a-row.a-spacing-none span.a-text-bold"
-    )
-    assert (
-        config.vendor_page.seller_info_value
-        == "#page-section-detail-seller-info div.a-row.a-spacing-none span:not(.a-text-bold)"
-    )
+    assert config.vendor_page.seller_info_key == "span.a-text-bold"
+    assert config.vendor_page.seller_info_value == "span:not(.a-text-bold)"
 
     assert config.vendor_catalog_page is not None
     assert (

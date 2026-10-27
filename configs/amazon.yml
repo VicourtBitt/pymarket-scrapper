@@ -24,10 +24,10 @@ search_page:
 
 vendor_page:
   name: ".vendor-name"
-  storefront_href: "#seller_info_storefront_link a"
-  seller_info_row: "#page-section-detail-seller-info div.a-row.a-spacing-none"
-  seller_info_key: "#page-section-detail-seller-info div.a-row.a-spacing-none span.a-text-bold"
-  seller_info_value: "#page-section-detail-seller-info div.a-row.a-spacing-none span:not(.a-text-bold)"
+  storefront_href: "#seller-info-storefront-link a, #seller_info_storefront_link a"
+  seller_info_row: "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none"
+  seller_info_key: "span.a-text-bold"
+  seller_info_value: "span:not(.a-text-bold)"
 
 product_page:
   title: "#productTitle"

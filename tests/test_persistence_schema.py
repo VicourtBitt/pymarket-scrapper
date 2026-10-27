@@ -14,6 +14,7 @@ from models import (
     ExtractionSearch,
     ProductObservation,
     ProductRecord,
+    VendorRecord,
 )
 from models.database import utc_now
 
@@ -28,6 +29,12 @@ def test_schema_has_expected_tables_and_relationships() -> None:
     } <= set(Base.metadata.tables)
     assert ExtractionSearch.run.property.back_populates == "searches"
     assert ProductObservation.product.property.back_populates == "observations"
+
+
+def test_vendor_cnpj_is_optional_and_sized_for_formatted_values() -> None:
+    cnpj = VendorRecord.__table__.c.cnpj
+    assert cnpj.nullable is True
+    assert cnpj.type.length == 32
 
 
 def test_product_identity_and_observation_constraints_are_explicit() -> None:
@@ -116,3 +123,17 @@ def test_migration_does_not_reintroduce_removed_database_defaults() -> None:
     ).read_text()
     assert "server_default" not in migration
     assert 'sa.Column("marketplace", sa.String(100), nullable=False)' in migration
+
+
+def test_vendor_cnpj_migration_is_chained_and_reversible() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0002_add_vendor_cnpj.py"
+    )
+    migration = migration_path.read_text()
+    assert 'revision: str = "0002_add_vendor_cnpj"' in migration
+    assert 'down_revision: Optional[str] = "0001_extraction_persistence"' in migration
+    assert 'op.add_column("vendors"' in migration
+    assert 'op.drop_column("vendors", "cnpj")' in migration

@@ -3,7 +3,23 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from models import ProductItem
-from main import run_amazon_workflow
+from main import _vendor_data, run_amazon_workflow
+
+
+def test_vendor_data_extracts_exact_cnpj_key_and_preserves_seller_info() -> None:
+    seller_info = {
+        "  cNpJ:  ": " 62.246.912/0001-03 ",
+        "CNPJ emissor": "not-the-vendor-cnpj",
+    }
+
+    vendor = _vendor_data(
+        "vendor-1",
+        "https://example.test/vendor-1",
+        {"seller_info": seller_info},
+    )
+
+    assert vendor["cnpj"] == "62.246.912/0001-03"
+    assert vendor["metadata"]["seller_info"] is seller_info
 
 
 class FakeCrawler:

@@ -44,7 +44,7 @@ class PostgreSQLSink:
 
         Args:
             vendor_data: Vendor fields including the required ``vendor_id``
-                and ``name`` keys.
+                and ``name`` keys, plus optional ``cnpj`` and metadata fields.
 
         Raises:
             Exception: Propagates database failures after rolling back.
@@ -73,6 +73,7 @@ class PostgreSQLSink:
             extracted_emails=vendor_data.get('extracted_emails', []),
             extracted_phones=vendor_data.get('extracted_phones', []),
             external_id=vendor_data.get('external_id'),
+            cnpj=vendor_data.get('cnpj'),
             metadata_blob=vendor_data.get('metadata', {})
         )
 

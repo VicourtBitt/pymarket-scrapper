@@ -53,13 +53,23 @@ def _vendor_data(vendor_id: str, vendor_url: str, details: dict[str, Any]) -> di
     Returns:
         A normalized vendor dictionary for ``PostgreSQLSink.load_vendor``.
     """
+    seller_info = details.get("seller_info", {})
+    cnpj = None
+    if isinstance(seller_info, dict):
+        for key, value in seller_info.items():
+            if isinstance(key, str) and key.strip().rstrip(":").strip().casefold() == "cnpj":
+                if value is not None:
+                    cnpj = str(value).strip() or None
+                break
+
     return {
         "vendor_id": vendor_id,
         "name": details.get("name") or vendor_id,
         "url": details.get("vendor_url") or vendor_url,
+        "cnpj": cnpj,
         "metadata": {
             "storefront_url": details.get("storefront_url"),
-            "seller_info": details.get("seller_info", {}),
+            "seller_info": seller_info,
         },
     }
 

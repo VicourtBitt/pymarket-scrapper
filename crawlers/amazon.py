@@ -4,7 +4,7 @@ from enum import Enum
 from typing import AsyncIterator, Optional
 from urllib.parse import urlencode, urljoin
 
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from include import LocalizedSanitization
 from models import ProductItem, VendorProfile
@@ -49,6 +49,7 @@ class AmazonCrawler(BaseCrawler):
     """Extract configured Amazon search, product, vendor, and catalog data."""
 
     _DEFAULT_BASE_URL = "https://www.amazon.com.br/"
+    _NAVIGATION_TIMEOUT_MS = 30_000
 
     def __init__(self, page: Page, sanitizer: LocalizedSanitization, config: MarketplaceConfig) -> None:
         """Initialize the crawler with injected browser and marketplace services.
@@ -71,6 +72,20 @@ class AmazonCrawler(BaseCrawler):
         """Return an absolute product URL using the configured base URL."""
         return urljoin(self.config.base_url or self._DEFAULT_BASE_URL, product_url)
 
+    async def _goto_dom_ready(self, url: str) -> None:
+        """Navigate until the DOM is ready, tolerating only navigation timeouts."""
+        try:
+            await self.page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=self._NAVIGATION_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError:
+            self.logger.warning(
+                "Amazon navigation timed out after DOM-ready wait; continuing extraction: %s",
+                url,
+            )
+
     async def extract_vendor_info(self, vendor_url: str) -> dict:
         """Extract configured seller identity, storefront, and seller fields.
 
@@ -82,13 +97,22 @@ class AmazonCrawler(BaseCrawler):
             ``storefront_url``, and ``seller_info``.
         """
         selectors = self.config.vendor_page
-        await self.page.goto(vendor_url)
+        await self._goto_dom_ready(vendor_url)
 
         storefront_url = None
         if selectors.storefront_href:
-            storefront = self.page.locator(selectors.storefront_href).first
-            if await storefront.count() > 0:
-                storefront_url = await storefront.get_attribute("href")
+            storefront_selectors = [
+                selector.strip()
+                for selector in selectors.storefront_href.split(",")
+                if selector.strip()
+            ]
+            for storefront_selector in storefront_selectors:
+                storefront = self.page.locator(storefront_selector).first
+                if await storefront.count() > 0:
+                    href = await storefront.get_attribute("href")
+                    if href:
+                        storefront_url = urljoin(vendor_url, href)
+                        break
 
         name = await self._optional_text(selectors.name)
         seller_info: dict[str, str] = {}
@@ -191,7 +215,7 @@ class AmazonCrawler(BaseCrawler):
             raise ValueError(
                 "Amazon marketplace configuration must define vendor_catalog_page"
             )
-        await self.page.goto(vendor_url)
+        await self._goto_dom_ready(vendor_url)
 
         cards = await self.page.locator(selectors.product_card).all()
         for card in cards[:limit]:
