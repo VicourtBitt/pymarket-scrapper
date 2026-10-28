@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -299,6 +300,82 @@ def test_extracts_product_page_details() -> None:
     assert product["description"] == "Good product"
 
 
+def test_product_and_vendor_diagnostic_stages_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    config = detail_config()
+    page = DetailPage(
+        {
+            "#title": DetailLocator("Configured product"),
+            "#merchant": DetailLocator(attributes={"data-csa-c-asin": "SELLER1"}),
+            ".vendor-name": DetailLocator("Acme Store"),
+            "#storefront a": DetailLocator(attributes={"href": "/stores/acme"}),
+            "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none": [
+                DetailLocator(
+                    children={
+                        "span.a-text-bold": [DetailLocator("CNPJ:")],
+                        "span:not(.a-text-bold)": [DetailLocator("private-value")],
+                    }
+                )
+            ],
+        }
+    )
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    with caplog.at_level(logging.DEBUG, logger="pymarket_scrapper.crawlers.amazon"):
+        asyncio.run(crawler.extract_product_info("/dp/abc"))
+        asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("product detail starts" in message for message in messages)
+    assert any("product detail completes" in message for message in messages)
+    assert any("extracted vendor fields vendor_id=SELLER1" in message for message in messages)
+    assert any("vendor extraction starts" in message for message in messages)
+    assert any("vendor page navigation completes" in message for message in messages)
+    assert any("storefront selector inspected" in message for message in messages)
+    assert any("seller rows count=1" in message for message in messages)
+    assert any("key_present=True value_present=True" in message for message in messages)
+    assert "private-value" not in "\n".join(messages)
+
+
+def test_product_page_prefers_vendor_id_from_configured_vendor_link() -> None:
+    config = detail_config()
+    config.product_page.merchant_vendor_link = "#merchant-link"
+    page = DetailPage(
+        {
+            "#title": DetailLocator("Configured product"),
+            "#merchant-link": DetailLocator(
+                attributes={"href": "/seller?SellerId=vendor-from-link"}
+            ),
+        }
+    )
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    product = asyncio.run(crawler.extract_product_info("/dp/abc"))
+
+    assert product["vendor_id"] == "vendor-from-link"
+    assert product["vendor_url"] == "https://example.test/seller?SellerId=vendor-from-link"
+
+
+def test_product_page_ignores_javascript_vendor_link_and_uses_legacy_id() -> None:
+    config = detail_config()
+    config.product_page.merchant_vendor_link = "#merchant-link"
+    page = DetailPage(
+        {
+            "#title": DetailLocator("Configured product"),
+            "#merchant-link": DetailLocator(attributes={"href": "javascript:void(0)"}),
+            "#merchant": DetailLocator(
+                attributes={"data-csa-c-asin": "legacy-seller"}
+            ),
+        }
+    )
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    product = asyncio.run(crawler.extract_product_info("/dp/abc"))
+
+    assert product["vendor_url"] is None
+    assert product["vendor_id"] == "legacy-seller"
+    assert page.urls == ["https://example.test/dp/abc"]
+
+
 def test_extracts_vendor_info_and_catalog() -> None:
     seller_rows = [
         DetailLocator(
@@ -361,6 +438,53 @@ def test_extracts_vendor_info_and_catalog() -> None:
     assert products[0].product_id == "ASIN1"
     assert products[0].title == "Catalog product"
     assert products[0].price == 10.0
+
+
+def test_extracts_storefront_from_current_amazon_selector() -> None:
+    config = detail_config()
+    config.vendor_page.storefront_href = (
+        "#seller-info-storefront-link a, #seller_info_storefront_link a"
+    )
+    page = DetailPage(
+        {
+            "#seller-info-storefront-link a": DetailLocator(
+                attributes={
+                    "href": (
+                        "/s?ie=UTF8&marketplaceID=A2Q3Y263D00KWC"
+                        "&me=A1RZY52AGFFK82"
+                    )
+                }
+            )
+        }
+    )
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    vendor = asyncio.run(
+        crawler.extract_vendor_info("https://www.amazon.com.br/seller/example")
+    )
+
+    assert vendor["storefront_url"] == (
+        "https://www.amazon.com.br/s?ie=UTF8&marketplaceID=A2Q3Y263D00KWC"
+        "&me=A1RZY52AGFFK82"
+    )
+
+
+def test_storefront_alternatives_skip_invalid_href() -> None:
+    config = detail_config()
+    config.vendor_page.storefront_href = "#invalid a, #seller-info-storefront-link a"
+    page = DetailPage(
+        {
+            "#invalid a": DetailLocator(attributes={"href": "javascript:void(0)"}),
+            "#seller-info-storefront-link a": DetailLocator(
+                attributes={"href": "/s?me=valid-seller"}
+            ),
+        }
+    )
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    vendor = asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+
+    assert vendor["storefront_url"] == "https://example.test/s?me=valid-seller"
 
 
 def test_vendor_and_catalog_navigation_wait_for_bounded_dom_ready() -> None:

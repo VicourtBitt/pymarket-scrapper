@@ -14,12 +14,19 @@ class BaseCrawler(ABC):
         version: str, 
         sanitizer: LocalizedSanitization,
         config: MarketplaceConfig
-    ):
+    ) -> None:
         """Store the injected marketplace metadata and parsing services."""
         self.marketplace_name = marketplace_name
         self.version = version
         self.sanitizer = sanitizer
         self.config = config
+
+    def extract_vendor_id(self, vendor_url: str) -> Optional[str]:
+        """Extract a vendor ID through the injected sanitizer."""
+        try:
+            return self.sanitizer.extract_vendor_id(vendor_url)
+        except (TypeError, ValueError):
+            return None
         
     @abstractmethod
     async def extract_search_items(self, search_term: str, limit: int = 50, sort_strategy: Optional[str] = None) -> AsyncIterator[ProductItem]:

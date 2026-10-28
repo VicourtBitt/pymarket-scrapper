@@ -23,7 +23,7 @@ search_page:
   next_page_button: "a.s-pagination-next"
 
 vendor_page:
-  name: ".vendor-name"
+  name: ".seller-name"
   storefront_href: "#seller-info-storefront-link a, #seller_info_storefront_link a"
   seller_info_row: "#page-section-detail-seller-info .a-box-inner > div.a-row.a-spacing-none"
   seller_info_key: "span.a-text-bold"

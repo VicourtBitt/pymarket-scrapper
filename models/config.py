@@ -25,6 +25,14 @@ class ProductFilter(BaseModel):
 
     title_contains: Optional[str] = None
 
+    def matches(self, title: Optional[str]) -> bool:
+        """Return whether a product title satisfies this configured filter."""
+        if self.title_contains is None:
+            return True
+        if title is None:
+            return False
+        return self.title_contains.casefold() in title.casefold()
+
     def as_sql(self) -> tuple[str, list[str]]:
         if self.title_contains is None:
             return "TRUE", []

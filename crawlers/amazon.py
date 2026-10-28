@@ -2,7 +2,7 @@ from html.parser import HTMLParser
 import logging
 from enum import Enum
 from typing import AsyncIterator, Optional
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
@@ -72,8 +72,21 @@ class AmazonCrawler(BaseCrawler):
         """Return an absolute product URL using the configured base URL."""
         return urljoin(self.config.base_url or self._DEFAULT_BASE_URL, product_url)
 
+    def _is_navigable_http_url(self, url: str) -> bool:
+        """Return whether a resolved URL can safely be opened by Playwright."""
+        parsed = urlparse(url)
+        return parsed.scheme.casefold() in {"http", "https"} and bool(parsed.netloc)
+
+    @staticmethod
+    def _selector_alternatives(selector: Optional[str]) -> list[str]:
+        """Return non-empty CSS selector alternatives in configuration order."""
+        if not selector:
+            return []
+        return [candidate.strip() for candidate in selector.split(",") if candidate.strip()]
+
     async def _goto_dom_ready(self, url: str) -> None:
         """Navigate until the DOM is ready, tolerating only navigation timeouts."""
+        self.logger.info("vendor page navigation starts url=%s", url)
         try:
             await self.page.goto(
                 url,
@@ -85,6 +98,7 @@ class AmazonCrawler(BaseCrawler):
                 "Amazon navigation timed out after DOM-ready wait; continuing extraction: %s",
                 url,
             )
+        self.logger.info("vendor page navigation completes url=%s", url)
 
     async def extract_vendor_info(self, vendor_url: str) -> dict:
         """Extract configured seller identity, storefront, and seller fields.
@@ -97,39 +111,82 @@ class AmazonCrawler(BaseCrawler):
             ``storefront_url``, and ``seller_info``.
         """
         selectors = self.config.vendor_page
+        self.logger.info("vendor extraction starts url=%s", vendor_url)
         await self._goto_dom_ready(vendor_url)
 
         storefront_url = None
-        if selectors.storefront_href:
-            storefront_selectors = [
-                selector.strip()
-                for selector in selectors.storefront_href.split(",")
-                if selector.strip()
-            ]
-            for storefront_selector in storefront_selectors:
+        for storefront_selector in self._selector_alternatives(selectors.storefront_href):
+            self.logger.debug(
+                "storefront selector inspected selector=%s", storefront_selector
+            )
+            try:
                 storefront = self.page.locator(storefront_selector).first
-                if await storefront.count() > 0:
-                    href = await storefront.get_attribute("href")
-                    if href:
-                        storefront_url = urljoin(vendor_url, href)
-                        break
+                if await storefront.count() == 0:
+                    self.logger.debug(
+                        "storefront selector href result selector=%s found=false",
+                        storefront_selector,
+                    )
+                    continue
+                href = await storefront.get_attribute("href")
+                if not href:
+                    self.logger.debug(
+                        "storefront selector href result selector=%s found=true href_present=false",
+                        storefront_selector,
+                    )
+                    continue
+                candidate = urljoin(vendor_url, href.strip())
+                self.logger.debug(
+                    "storefront selector href result selector=%s found=true "
+                    "href_present=true href=%s",
+                    storefront_selector,
+                    candidate,
+                )
+                if self._is_navigable_http_url(candidate):
+                    storefront_url = candidate
+                    break
+                self.logger.debug(
+                    "Ignoring non-navigable Amazon storefront URL from %s: %s",
+                    storefront_selector,
+                    candidate,
+                )
+            except Exception as exc:
+                # A stale or malformed optional selector must not prevent the
+                # seller identity and other seller fields from being extracted.
+                self.logger.warning(
+                    "Unable to inspect Amazon storefront selector %s: %s",
+                    storefront_selector,
+                    exc,
+                )
 
         name = await self._optional_text(selectors.name)
         seller_info: dict[str, str] = {}
         if selectors.seller_info_row:
             rows = await self.page.locator(selectors.seller_info_row).all()
+            self.logger.info("seller rows count=%d", len(rows))
             for row in rows:
                 key = await self._optional_text_from(row, selectors.seller_info_key)
                 value = await self._optional_text_from(row, selectors.seller_info_value)
+                self.logger.debug(
+                    "seller row extracted key_present=%s value_present=%s",
+                    bool(key),
+                    bool(value),
+                )
                 if key and value:
                     seller_info[key] = value
 
-        return {
+        result = {
             "vendor_url": vendor_url,
             "name": name,
             "storefront_url": storefront_url,
             "seller_info": seller_info,
         }
+        self.logger.info(
+            "vendor extraction completes url=%s storefront_present=%s seller_fields=%d",
+            vendor_url,
+            bool(storefront_url),
+            len(seller_info),
+        )
+        return result
 
     async def extract_product_info(self, product_url: str) -> dict:
         """Extract configured product details from an Amazon product page.
@@ -149,21 +206,33 @@ class AmazonCrawler(BaseCrawler):
             raise ValueError("Amazon marketplace configuration must define product_page")
 
         normalized_product_url = self._normalize_product_url(product_url)
+        self.logger.info("product detail starts url=%s", normalized_product_url)
         await self.page.goto(normalized_product_url)
         title = await self._optional_text(selectors.title)
         price_text = await self._price_text(selectors)
         vendor_id = None
         vendor_url = None
-        if selectors.merchant_vendor_id:
+        if selectors.merchant_vendor_link:
+            vendor_link = self.page.locator(selectors.merchant_vendor_link).first
+            if await vendor_link.count() > 0:
+                href = await vendor_link.get_attribute("href")
+                if href:
+                    resolved_vendor_url = urljoin(normalized_product_url, href)
+                    if self._is_navigable_http_url(resolved_vendor_url):
+                        vendor_url = resolved_vendor_url
+                        vendor_id = self.extract_vendor_id(vendor_url)
+                    else:
+                        self.logger.debug(
+                            "Ignoring non-navigable Amazon merchant URL: %s",
+                            resolved_vendor_url,
+                        )
+
+        # Retain support for configurations that expose only the merchant
+        # element's legacy data attribute.
+        if not vendor_id and selectors.merchant_vendor_id:
             merchant = self.page.locator(selectors.merchant_vendor_id).first
             if await merchant.count() > 0:
                 vendor_id = await merchant.get_attribute("data-csa-c-asin")
-                if selectors.merchant_vendor_link:
-                    vendor_link = self.page.locator(selectors.merchant_vendor_link).first
-                    if await vendor_link.count() > 0:
-                        href = await vendor_link.get_attribute("href")
-                        if href:
-                            vendor_url = urljoin(normalized_product_url, href)
 
         details: dict[str, str] = {}
         if selectors.details_row:
@@ -179,7 +248,7 @@ class AmazonCrawler(BaseCrawler):
         description = await self._optional_html_text(selectors.description)
         features = await self._all_text(selectors.features)
         reviews = await self._extract_reviews(selectors.reviews)
-        return {
+        result = {
             "url": normalized_product_url,
             "title": title,
             "price": self.sanitizer.parse_price(price_text),
@@ -194,6 +263,18 @@ class AmazonCrawler(BaseCrawler):
             "features": features,
             "reviews": reviews,
         }
+        self.logger.info(
+            "product detail completes url=%s vendor_id_present=%s vendor_url_present=%s",
+            normalized_product_url,
+            bool(vendor_id),
+            bool(vendor_url),
+        )
+        self.logger.info(
+            "extracted vendor fields vendor_id=%s vendor_url=%s",
+            vendor_id,
+            vendor_url,
+        )
+        return result
 
     async def extract_vendor_catalog(
         self, vendor_url: str, limit: int = 50
@@ -215,9 +296,11 @@ class AmazonCrawler(BaseCrawler):
             raise ValueError(
                 "Amazon marketplace configuration must define vendor_catalog_page"
             )
+        self.logger.info("catalog extraction starts url=%s", vendor_url)
         await self._goto_dom_ready(vendor_url)
 
         cards = await self.page.locator(selectors.product_card).all()
+        self.logger.info("catalog extraction cards=%d", min(len(cards), limit))
         for card in cards[:limit]:
             product_id = await card.get_attribute(
                 selectors.product_id_attribute or "data-asin"
@@ -240,7 +323,7 @@ class AmazonCrawler(BaseCrawler):
                     self.sanitizer.extract_currency_symbol(price_text or "")
                     or self.sanitizer.default_currency_fallback
                 ),
-                vendor_id=self.sanitizer.extract_vendor_id(vendor_url),
+                vendor_id=self.extract_vendor_id(vendor_url),
             )
 
     async def _optional_text(self, selector: Optional[str]) -> Optional[str]:

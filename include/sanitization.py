@@ -1,6 +1,7 @@
 import re
 import logging
 from typing import Optional
+from urllib.parse import parse_qsl, urlsplit
 
 class LocalizedSanitization:
     """
@@ -52,6 +53,15 @@ class LocalizedSanitization:
         return match.group(1) if match else None
 
     def extract_vendor_id(self, url: str) -> Optional[str]:
-        """ Example of another localized extraction: finding vendor IDs from URLs. """
-        match = re.search(r"seller=([A-Z0-9]+)", url)
-        return match.group(1) if match else None
+        """Extract a seller ID from realistic marketplace seller URLs."""
+        if not url:
+            return None
+        try:
+            query = parse_qsl(urlsplit(url).query, keep_blank_values=False)
+        except ValueError:
+            self.logger.warning("Could not parse vendor URL: %s", url)
+            return None
+        for key, value in query:
+            if key.casefold() in {"seller", "sellerid"} and value:
+                return value
+        return None
