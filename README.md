@@ -32,7 +32,7 @@ The current Amazon flow is:
    in-memory cache.
 4. Apply `Deduplicator` and `SQLFilter` through `Pipeline`.
 5. Upsert filtered products and resolved vendors with `PostgreSQLSink`.
-6. Scan resolved vendor storefronts and upsert unique catalog products.
+6. Optionally scan resolved vendor storefronts and upsert unique catalog products.
 
 The crawler and pipeline stages use async iterators, so the complete result set
 does not need to be held in memory. See the [architecture guide](docs/architecture.rst)
@@ -96,11 +96,30 @@ environment variables that are already set.
 | `MARKETPLACE` | `amazon` | Marketplace key used to select the YAML file |
 | `MARKETPLACE_CONFIG_DIR` | `configs` | Directory containing marketplace YAML files |
 | `DATABASE_URL` | none | Required SQLAlchemy connection URL |
-| `PRODUCT_TITLE_CONTAINS` | `Semente` | Optional title substring used by `SQLFilter` |
+| `PRODUCT_TITLE_CONTAINS` | none | Optional case-insensitive title substring. Product and vendor/all detail workflows filter search results before opening product pages; product-only search results are preserved. |
 | `LOG_DIRECTORY` | `logs` | Directory used by application logging |
+| `LOG_LEVEL` | `INFO` | Python logging level used by the CLI, such as `DEBUG`, `INFO`, or `WARNING` |
 
 The current `main.py` workflow uses the search term `sementes para plantar`,
 requests up to 50 results, and opens Chromium with `headless=False`.
+
+### Diagnostic logs
+
+The CLI configures the `pymarket_scrapper` logger and writes normal output and
+rotating diagnostic files under `LOG_DIRECTORY` (default: `logs`). Set the
+standard `LOG_LEVEL` environment variable when a more or less detailed run is
+needed, for example:
+
+```bash
+LOG_LEVEL=DEBUG LOG_DIRECTORY=logs python main.py \
+  --extraction vendor --search "garden seeds" --headless
+```
+
+Vendor and product detail stage messages identify navigation, selector
+inspection, extracted-field presence, normalization, and persistence. Sensitive
+seller values such as CNPJ, phone numbers, and email addresses are intentionally
+not written to the logs; marketplace page URLs may be included to identify the
+page where processing stopped.
 
 ## Database and migrations
 
@@ -119,17 +138,34 @@ shared database.
 
 ## Run the application
 
-Set a SQLAlchemy PostgreSQL URL and execute the module from the repository root:
+The executable is a Typer CLI. Set a SQLAlchemy PostgreSQL URL (or pass
+`--database-url`) and execute it from the repository root:
 
 ```bash
 export DATABASE_URL='postgresql+psycopg2://user:password@localhost:5432/database'
-python main.py
+python main.py --search "sementes para plantar" --limit 50 --headless
 ```
 
 This command performs live marketplace requests and writes data to the
-configured database. It is intentionally a small proof-of-concept entry point,
-not a general command-line interface: search terms, limits, and browser mode
-are currently defined in `main.py`.
+configured database. The default `product` extraction persists deduplicated
+search products without opening product or vendor detail pages. Use
+`--extraction vendor` to persist only vendors,
+or `--extraction all` to additionally crawl storefront catalog products.
+`--storefront-products` enables catalog processing for vendor/all modes and is
+ignored by product mode, and
+`--recursive-vendors` backfills persisted products whose `vendor_id` is NULL.
+Other options include `--marketplace`, `--sort-strategy`, `--limit`,
+`--product-title-contains`, and `--no-headless`. The title filter defaults to
+`PRODUCT_TITLE_CONTAINS`; an explicitly supplied CLI value takes precedence,
+and an empty or whitespace-only value disables filtering.
+
+```bash
+python main.py --extraction all --search "garden seeds" --storefront-products
+python main.py --recursive-vendors --database-url "$DATABASE_URL"
+```
+
+Unit tests can import `main.app` and workflow helpers without launching a
+browser or connecting to a database.
 
 ## Test
 
