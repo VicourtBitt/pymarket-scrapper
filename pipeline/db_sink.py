@@ -1,7 +1,8 @@
 import logging
+from collections.abc import Iterator
 from typing import Any, Callable, Dict, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 from models import VendorRecord, ProductRecord
@@ -74,6 +75,7 @@ class PostgreSQLSink:
             extracted_phones=vendor_data.get('extracted_phones', []),
             external_id=vendor_data.get('external_id'),
             cnpj=vendor_data.get('cnpj'),
+            storefront_url=vendor_data.get('storefront_url'),
             metadata_blob=vendor_data.get('metadata', {})
         )
 
@@ -130,4 +132,55 @@ class PostgreSQLSink:
             except Exception:
                 session.rollback()
                 logger.exception("Unable to persist product %s", product_data.get("product_id"))
+                raise
+
+    def iter_products_without_vendor(
+        self, *, batch_size: int = 100
+    ) -> Iterator[Dict[str, Optional[str]]]:
+        """Yield product identifiers and URLs whose vendor is still unknown.
+
+        Rows are fetched in bounded batches so a large backfill does not load
+        the products table into memory.  The yielded dictionaries are safe to
+        consume after the session is closed.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        last_product_id: Optional[str] = None
+        while True:
+            with self.SessionLocal() as session:
+                filters = [
+                    ProductRecord.marketplace == self.marketplace,
+                    ProductRecord.vendor_id.is_(None),
+                ]
+                if last_product_id is not None:
+                    filters.append(ProductRecord.product_id > last_product_id)
+                rows = session.execute(
+                    select(ProductRecord.product_id, ProductRecord.url)
+                    .where(*filters)
+                    .order_by(ProductRecord.product_id)
+                    .limit(batch_size)
+                ).all()
+            if not rows:
+                return
+            for product_id, url in rows:
+                yield {"product_id": product_id, "url": url}
+            last_product_id = str(rows[-1][0])
+
+    def update_product_vendor(self, product_id: str, vendor_id: str) -> None:
+        """Set a product's vendor, rolling back and logging on database errors."""
+        if not product_id or not vendor_id:
+            raise ValueError("product_id and vendor_id are required")
+        with self.SessionLocal() as session:
+            try:
+                session.execute(
+                    update(ProductRecord)
+                    .where(ProductRecord.product_id == product_id)
+                    .values(vendor_id=vendor_id)
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception(
+                    "Unable to update vendor %s for product %s", vendor_id, product_id
+                )
                 raise

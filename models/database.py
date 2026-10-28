@@ -39,6 +39,7 @@ class VendorRecord(Base):
     extracted_emails: Mapped[List[Any]] = mapped_column(JSON, default=list, nullable=False)
     external_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     cnpj: Mapped[Optional[str]] = mapped_column(String(32))
+    storefront_url: Mapped[Optional[str]] = mapped_column(String(2048))
     metadata_blob: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
     products: Mapped[List["ProductRecord"]] = relationship(back_populates="vendor")

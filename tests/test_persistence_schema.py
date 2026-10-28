@@ -37,6 +37,12 @@ def test_vendor_cnpj_is_optional_and_sized_for_formatted_values() -> None:
     assert cnpj.type.length == 32
 
 
+def test_vendor_storefront_url_is_optional_and_sized_for_urls() -> None:
+    storefront_url = VendorRecord.__table__.c.storefront_url
+    assert storefront_url.nullable is True
+    assert storefront_url.type.length == 2048
+
+
 def test_product_identity_and_observation_constraints_are_explicit() -> None:
     products = ProductRecord.__table__
     observations = ProductObservation.__table__
@@ -137,3 +143,17 @@ def test_vendor_cnpj_migration_is_chained_and_reversible() -> None:
     assert 'down_revision: Optional[str] = "0001_extraction_persistence"' in migration
     assert 'op.add_column("vendors"' in migration
     assert 'op.drop_column("vendors", "cnpj")' in migration
+
+
+def test_vendor_storefront_url_migration_is_chained_and_reversible() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0003_add_vendor_storefront_url.py"
+    )
+    migration = migration_path.read_text()
+    assert 'revision: str = "0003_add_vendor_storefront_url"' in migration
+    assert 'down_revision: Optional[str] = "0002_add_vendor_cnpj"' in migration
+    assert 'sa.Column("storefront_url", sa.String(2048), nullable=True)' in migration
+    assert 'op.drop_column("vendors", "storefront_url")' in migration
