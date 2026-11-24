@@ -170,7 +170,7 @@ database holds more than one marketplace, name their marketplace explicitly:
 
 ```bash
 alembic -x default_marketplace=amazon upgrade head
-``` Review `alembic.ini` and `alembic/env.py` for
+```\n\nReview `alembic.ini` and `alembic/env.py` for
 the repository's migration connection behavior before running it against a
 shared database.
 
