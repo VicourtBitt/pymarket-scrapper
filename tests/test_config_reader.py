@@ -146,3 +146,29 @@ def test_amazon_config_exposes_detail_and_vendor_selectors() -> None:
         == 'div[role="list_item"][data-asin]'
     )
     assert config.vendor_catalog_page.product_id_attribute == "data-asin"
+
+
+def test_repository_amazon_config_declares_locale_browser_and_crawlers() -> None:
+    from pathlib import Path
+
+    from crawlers import AmazonCrawler, AmazonVendorCrawler, crawler_classes
+    from include import LocalizedSanitization
+    from models.config import MarketplaceConfig
+
+    config = MarketplaceConfig.from_marketplace("amazon", Path(__file__).parents[1] / "configs")
+
+    assert config.locale.decimal_separator == ","
+    assert config.browser.context_options()["user_agent"].startswith("Mozilla/5.0")
+    assert LocalizedSanitization.from_locale(config.locale).parse_price("R$ 1.234,50") == 1234.5
+    assert crawler_classes(config, "amazon") == (AmazonCrawler, AmazonVendorCrawler)
+
+
+def test_unknown_marketplace_family_is_rejected() -> None:
+    import pytest
+
+    from crawlers import crawler_classes
+    from models.config import MarketplaceConfig
+
+    config = MarketplaceConfig.model_construct(marketplace="unknown")
+    with pytest.raises(ValueError, match="No crawler registered"):
+        crawler_classes(config, "unknown")

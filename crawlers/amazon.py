@@ -68,10 +68,16 @@ class AmazonCrawler(BaseCrawler):
 
         # Retain support for configurations that expose only the merchant
         # element's legacy data attribute.
-        if not vendor_id and selectors.merchant_vendor_id:
+        if (
+            not vendor_id
+            and selectors.merchant_vendor_id
+            and selectors.merchant_vendor_id_attribute
+        ):
             merchant = self.page.locator(selectors.merchant_vendor_id).first
             if await merchant.count() > 0:
-                vendor_id = await merchant.get_attribute("data-csa-c-asin")
+                vendor_id = await merchant.get_attribute(
+                    selectors.merchant_vendor_id_attribute
+                )
 
         details: dict[str, str] = {}
         if selectors.details_row:

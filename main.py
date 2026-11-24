@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 from playwright.async_api import async_playwright
 
-from crawlers import AmazonCrawler, AmazonVendorCrawler
+from crawlers import crawler_classes
 from include import LocalizedSanitization, configure_logging, load_environment
 from models import ExtractionRunRequest, ProductItem
 from models.config import MarketplaceConfig, ProductFilter
@@ -79,6 +79,7 @@ async def _run_cli(
     config = MarketplaceConfig.from_marketplace(
         marketplace, Path(os.getenv("MARKETPLACE_CONFIG_DIR", "configs"))
     )
+    classes = crawler_classes(config, marketplace)
     sink = PostgreSQLSink(database_url, marketplace=marketplace)
     product_filter = _cli_product_filter(product_title_contains)
     sql_filter = SQLFilter[ProductItem](model_class=ProductItem, filters=product_filter)
@@ -86,18 +87,12 @@ async def _run_cli(
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
             try:
-                context = await browser.new_context(
-                    viewport={"width": 1280, "height": 720},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-                )
+                context = await browser.new_context(**config.browser.context_options())
                 page = await context.new_page()
-                sanitizer = LocalizedSanitization(
-                    decimal_separator=",", thousands_separator="."
-                )
+                sanitizer = LocalizedSanitization.from_locale(config.locale)
                 workflow = ExtractionWorkflow(
-                    crawler=AmazonCrawler(page, sanitizer, config),
-                    vendor_crawler=AmazonVendorCrawler(page, sanitizer, config),
+                    crawler=classes.crawler(page, sanitizer, config),
+                    vendor_crawler=classes.vendor_crawler(page, sanitizer, config),
                     sink=sink,
                     sql_filter=sql_filter,
                     product_filter=product_filter,

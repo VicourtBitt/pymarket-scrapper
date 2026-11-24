@@ -276,6 +276,7 @@ def detail_config() -> MarketplaceConfig:
                 "price_decimal": ".decimal",
                 "price_fraction": ".fraction",
                 "merchant_vendor_id": "#merchant",
+                "merchant_vendor_id_attribute": "data-csa-c-asin",
                 "details_row": ".detail-row",
                 "details_cell": "td",
                 "description": "#description",

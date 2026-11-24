@@ -19,6 +19,15 @@ class LocalizedSanitization:
         self.default_currency_fallback = currency_fallback
         self.logger = logging.getLogger("sanitization")
 
+    @classmethod
+    def from_locale(cls, locale: object) -> "LocalizedSanitization":
+        """Build a sanitizer from a ``MarketplaceConfig.locale`` section."""
+        return cls(
+            decimal_separator=getattr(locale, "decimal_separator", "."),
+            thousands_separator=getattr(locale, "thousands_separator", ","),
+            currency_fallback=getattr(locale, "currency_fallback", ""),
+        )
+
     def parse_price(self, raw_price: str) -> float:
         """ Converts strings like '$1,234.50' or 'R$ 1.234,50' into a clean float. """
         if not raw_price:

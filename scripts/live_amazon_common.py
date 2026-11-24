@@ -32,21 +32,12 @@ async def create_crawler(
         os.getenv("MARKETPLACE", "amazon"),
         Path(os.getenv("MARKETPLACE_CONFIG_DIR", "configs")),
     )
-    sanitizer = LocalizedSanitization(
-        decimal_separator=",",
-        thousands_separator=".",
-        currency_fallback="BRL",
-    )
+    sanitizer = LocalizedSanitization.from_locale(config.locale)
     browser = await playwright.chromium.launch(
         headless=os.getenv("HEADLESS", "false").lower() == "true"
     )
-    page = await browser.new_page(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/114.0.0.0 Safari/537.36"
-        )
-    )
+    context = await browser.new_context(**config.browser.context_options())
+    page = await context.new_page()
     return (
         browser,
         page,

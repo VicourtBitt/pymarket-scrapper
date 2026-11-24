@@ -2,6 +2,16 @@ marketplace: amazon
 
 base_url: https://www.amazon.com.br/s
 
+locale:
+  decimal_separator: ","
+  thousands_separator: "."
+  currency_fallback: BRL
+
+browser:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+  viewport_width: 1280
+  viewport_height: 720
+
 query_parameters:
   search_key: k
   sort_key: s
@@ -36,6 +46,7 @@ product_page:
   price_decimal: ".a-price-decimal"
   price_fraction: ".a-price-fraction"
   merchant_vendor_id: "#merchantInfoFeature_feature_div[data-csa-c-asin]"
+  merchant_vendor_id_attribute: data-csa-c-asin
   merchant_vendor_link: "#merchantInfoFeature_feature_div a"
   details_row: ".prodDetTable tr"
   details_cell: ".prodDetTable tr td"

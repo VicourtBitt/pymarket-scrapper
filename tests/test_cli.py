@@ -88,6 +88,7 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
 
     class _Browser:
         async def new_context(self, **kwargs: Any) -> "_Browser":
+            received["context"] = kwargs
             return self
 
         async def new_page(self) -> object:
@@ -118,12 +119,23 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
             received["run"] = (mode, search, kwargs)
 
     monkeypatch.setattr(main, "configure_logging", lambda *a, **k: logging.getLogger("test.cli"))
-    monkeypatch.setattr(main.MarketplaceConfig, "from_marketplace", staticmethod(lambda *a, **k: object()))
+    from types import SimpleNamespace
+
+    from crawlers import CrawlerClasses
+    from models.config import BrowserSettings, LocaleSettings
+
+    config = SimpleNamespace(
+        marketplace="amazon", locale=LocaleSettings(), browser=BrowserSettings(user_agent="UA"),
+    )
+    monkeypatch.setattr(main.MarketplaceConfig, "from_marketplace", staticmethod(lambda *a, **k: config))
     monkeypatch.setattr(main, "PostgreSQLSink", _Closeable)
     monkeypatch.setattr(main, "SQLFilter", _Closeable)
     monkeypatch.setattr(main, "async_playwright", _Playwright)
-    monkeypatch.setattr(main, "AmazonCrawler", lambda *a: "crawler")
-    monkeypatch.setattr(main, "AmazonVendorCrawler", lambda *a: "vendor_crawler")
+    monkeypatch.setattr(
+        main,
+        "crawler_classes",
+        lambda cfg, name: CrawlerClasses(lambda *a: "crawler", lambda *a: "vendor_crawler"),  # type: ignore[arg-type]
+    )
     monkeypatch.setattr(main, "ExtractionWorkflow", _Workflow)
 
     asyncio.run(main._run_cli(
@@ -132,6 +144,7 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
     ))
 
     assert received["headless"] is True
+    assert received["context"] == {"viewport": {"width": 1280, "height": 720}, "user_agent": "UA"}
     assert received["components"] == [
         "crawler", "logger", "product_filter", "sink", "sql_filter", "vendor_crawler",
     ]
