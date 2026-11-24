@@ -4,11 +4,11 @@ from typing import Optional, Dict, Any
 class ProductItem(BaseModel):
     """ The product that'll be extracted from the search page """
     product_id: str = Field(alias="product_id")
-    name: str = Field(alias="name")
-    product_url: HttpUrl = Field(alias="product_url")
+    title: str = Field(alias="title")
+    url: Optional[HttpUrl|str] = Field(alias="url")
     price: float = Field(alias="price")
     currency: str = Field(alias="currency")
-    vendor: str = Field(alias="vendor")
+    vendor_id: Optional[str] = Field(alias="vendor_id")
 
     external_id : Optional[str] = Field(
         default=None,
@@ -16,4 +16,4 @@ class ProductItem(BaseModel):
         description="External ID"
     )
 
-    metadata: Dict[str, Any] = Field(alias="metadata", default_factory=dict)
+    metadata: Optional[Dict[str, Any]] = Field(alias="metadata", default_factory=dict)

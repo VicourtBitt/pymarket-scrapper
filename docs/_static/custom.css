@@ -1,0 +1,154 @@
+:root {
+  --page-background: #f5f7f6;
+  --content-background: #ffffff;
+  --sidebar-background: #123f46;
+  --sidebar-border: #2d6970;
+  --sidebar-text: #e8f3f1;
+  --sidebar-muted: #b7d1cd;
+  --heading-color: #173c43;
+  --body-color: #29383b;
+  --link-color: #096b76;
+  --link-hover-color: #064e57;
+  --code-background: #edf2f1;
+  --code-border: #d3e1df;
+  --inline-code-color: #8a3d2e;
+}
+
+html {
+  background: var(--page-background);
+}
+
+body {
+  color: var(--body-color);
+  background: var(--page-background);
+  font-family: "Trebuchet MS", "Lucida Sans Unicode", sans-serif;
+  line-height: 1.65;
+}
+
+div.document {
+  background: var(--content-background);
+  box-shadow: 0 0 0 1px rgba(18, 63, 70, 0.08);
+}
+
+div.body {
+  max-width: 760px;
+  padding: 2.5rem 3rem 4rem;
+}
+
+div.sphinxsidebar {
+  background: var(--sidebar-background);
+  border-right: 1px solid var(--sidebar-border);
+  color: var(--sidebar-text);
+}
+
+div.sphinxsidebar h2,
+div.sphinxsidebar h3,
+div.sphinxsidebar p,
+div.sphinxsidebar a {
+  color: var(--sidebar-text);
+}
+
+div.sphinxsidebar h2,
+div.sphinxsidebar h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0;
+}
+
+div.sphinxsidebar p {
+  color: var(--sidebar-muted);
+}
+
+div.sphinxsidebar a {
+  border-bottom: 1px solid transparent;
+}
+
+div.sphinxsidebar a:hover,
+div.sphinxsidebar a:focus {
+  color: #ffffff;
+  border-bottom-color: #b9e3dc;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--heading-color);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  line-height: 1.25;
+  margin-top: 1.8em;
+}
+
+h1 {
+  border-bottom: 3px solid #73aaa6;
+  font-size: 2.1rem;
+  margin-top: 0;
+  padding-bottom: 0.45rem;
+}
+
+h2 {
+  border-bottom: 1px solid #c9dcda;
+  padding-bottom: 0.25rem;
+}
+
+a {
+  color: var(--link-color);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+a:hover,
+a:focus {
+  color: var(--link-hover-color);
+}
+
+pre,
+div[class^="highlight"] {
+  background: var(--code-background);
+  border: 1px solid var(--code-border);
+  border-radius: 4px;
+}
+
+pre {
+  padding: 1rem 1.15rem;
+}
+
+code,
+pre {
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+code {
+  color: var(--inline-code-color);
+}
+
+pre code {
+  color: inherit;
+}
+
+blockquote {
+  border-left: 4px solid #73aaa6;
+  color: #4b5c5e;
+  margin-left: 0;
+  padding-left: 1.25rem;
+}
+
+@media screen and (max-width: 760px) {
+  div.document {
+    box-shadow: none;
+  }
+
+  div.body {
+    padding: 1.75rem 1.25rem 3rem;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+  }
+
+  pre {
+    overflow-x: auto;
+  }
+}
