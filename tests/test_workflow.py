@@ -388,3 +388,20 @@ def test_run_tracking_is_skipped_without_a_request() -> None:
     sink = TrackingSink()
     asyncio.run(_workflow(FakeCrawler([]), FakeVendorCrawler(), sink).run(ExtractionMode.PRODUCT, "x"))
     assert sink.lifecycle == []
+
+
+def test_detail_requests_use_the_detail_crawler_not_the_search_crawler() -> None:
+    search_crawler = FakeCrawler([_product("p-1")])
+    detail_crawler = FakeCrawler([])
+    workflow = ExtractionWorkflow(
+        crawler=search_crawler,
+        detail_crawler=detail_crawler,
+        vendor_crawler=FakeVendorCrawler(),
+        sink=FakeSink(),
+        sql_filter=PassThroughFilter(),
+    )
+
+    asyncio.run(workflow.run(ExtractionMode.ALL, "x"))
+
+    assert search_crawler.product_urls == []
+    assert detail_crawler.product_urls == ["https://example.test/p-1"]

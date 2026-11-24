@@ -92,7 +92,9 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
             return self
 
         async def new_page(self) -> object:
-            return object()
+            page = object()
+            received.setdefault("pages", []).append(page)
+            return page
 
         async def close(self) -> None:
             received["browser_closed"] = True
@@ -114,6 +116,7 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
     class _Workflow:
         def __init__(self, **kwargs: Any) -> None:
             received["components"] = sorted(kwargs)
+            received["crawlers"] = kwargs
 
         async def run(self, mode: Any, search: str, **kwargs: Any) -> None:
             received["run"] = (mode, search, kwargs)
@@ -134,7 +137,7 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "crawler_classes",
-        lambda cfg, name: CrawlerClasses(lambda *a: "crawler", lambda *a: "vendor_crawler"),  # type: ignore[arg-type]
+        lambda cfg, name: CrawlerClasses(lambda *a: ("crawler", a[0]), lambda *a: ("vendor_crawler", a[0])),  # type: ignore[arg-type]
     )
     monkeypatch.setattr(main, "ExtractionWorkflow", _Workflow)
 
@@ -146,8 +149,13 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
     assert received["headless"] is True
     assert received["context"] == {"viewport": {"width": 1280, "height": 720}, "user_agent": "UA"}
     assert received["components"] == [
-        "crawler", "logger", "product_filter", "sink", "sql_filter", "vendor_crawler",
+        "crawler", "detail_crawler", "logger", "product_filter", "sink", "sql_filter",
+        "vendor_crawler",
     ]
+    search_page, detail_page = received["pages"]
+    assert received["crawlers"]["crawler"] == ("crawler", search_page)
+    assert received["crawlers"]["detail_crawler"] == ("crawler", detail_page)
+    assert received["crawlers"]["vendor_crawler"] == ("vendor_crawler", detail_page)
     assert received["run"] == (
         ExtractionMode.VENDOR,
         "seeds",

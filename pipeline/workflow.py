@@ -129,8 +129,19 @@ class ExtractionWorkflow:
         product_filter: Optional[ProductFilter] = None,
         logger: Optional[logging.Logger] = None,
         catalog_limit: int = 50,
+        detail_crawler: Optional[BaseCrawler] = None,
     ) -> None:
+        """
+        Args:
+            crawler: Product crawler whose page runs the search pagination.
+            detail_crawler: Product crawler for detail pages. It must use a
+                different Playwright page than ``crawler``: the search
+                generator is suspended mid-page while details are fetched, so
+                sharing one page would navigate the search results away.
+                Defaults to ``crawler`` (only safe in product mode or tests).
+        """
         self.crawler = crawler
+        self.detail_crawler = detail_crawler or crawler
         self.vendor_crawler = vendor_crawler
         self.sink = sink
         self.sql_filter = sql_filter
@@ -243,7 +254,7 @@ class ExtractionWorkflow:
             self.logger.warning("Skipping detail extraction for %s without URL", product.product_id)
             return None
         try:
-            details = await self.crawler.extract_product_info(str(product.url))
+            details = await self.detail_crawler.extract_product_info(str(product.url))
         except Exception:
             self.logger.exception("Detail extraction failed for product %s", product.product_id)
             return None
@@ -329,7 +340,7 @@ class ExtractionWorkflow:
                 self.logger.warning("Cannot backfill product %s without URL", product_id)
                 continue
             try:
-                details = await self.crawler.extract_product_info(str(row["url"]))
+                details = await self.detail_crawler.extract_product_info(str(row["url"]))
                 vendor = await self.vendors.resolve(
                     details.get("vendor_id"), details.get("vendor_url")
                 )

@@ -88,11 +88,15 @@ async def _run_cli(
             browser = await playwright.chromium.launch(headless=headless)
             try:
                 context = await browser.new_context(**config.browser.context_options())
-                page = await context.new_page()
+                # Search pagination keeps its own page; detail and vendor
+                # requests navigate a second page while the search is paused.
+                search_page = await context.new_page()
+                detail_page = await context.new_page()
                 sanitizer = LocalizedSanitization.from_locale(config.locale)
                 workflow = ExtractionWorkflow(
-                    crawler=classes.crawler(page, sanitizer, config),
-                    vendor_crawler=classes.vendor_crawler(page, sanitizer, config),
+                    crawler=classes.crawler(search_page, sanitizer, config),
+                    detail_crawler=classes.crawler(detail_page, sanitizer, config),
+                    vendor_crawler=classes.vendor_crawler(detail_page, sanitizer, config),
                     sink=sink,
                     sql_filter=sql_filter,
                     product_filter=product_filter,
