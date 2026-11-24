@@ -86,13 +86,15 @@ class VendorResolver:
         Raises:
             Exception: Crawler or sink failures propagate to the caller.
         """
-        if not vendor_id or not vendor_url:
+        if not vendor_id:
             return None
         key = str(vendor_id)
         if key in self.cache:
             self.stats.cache_hits += 1
             self.logger.info("vendor cache hit vendor_id=%s", key)
             return self.cache[key]
+        if not vendor_url:
+            return None
 
         details = await self.vendor_crawler.extract_vendor_info(str(vendor_url))
         if not isinstance(details, dict):
@@ -263,15 +265,19 @@ class ExtractionWorkflow:
             return None
         return details
 
-    async def _resolve_vendor_safely(self, vendor_id: Any, vendor_url: Any, product_id: str) -> None:
-        if not vendor_id or not vendor_url:
+    async def _resolve_vendor_safely(
+        self, vendor_id: Any, vendor_url: Any, product_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Return the persisted vendor, or ``None`` when it could not be saved."""
+        if not vendor_id or (not vendor_url and str(vendor_id) not in self.vendors.cache):
             self.logger.warning("Product %s has no vendor ID or vendor URL", product_id)
-            return
+            return None
         try:
-            await self.vendors.resolve(vendor_id, vendor_url)
+            return await self.vendors.resolve(vendor_id, vendor_url)
         except Exception:
             self.vendors.stats.failures += 1
             self.logger.exception("Unable to resolve vendor for product %s", product_id)
+            return None
 
     async def _enrich(self, stream: AsyncIterator[ProductItem]) -> AsyncIterator[ProductItem]:
         async for product in stream:
@@ -280,9 +286,12 @@ class ExtractionWorkflow:
                 # Keep the search-page data even when the detail page failed.
                 yield product
                 continue
-            await self._resolve_vendor_safely(
+            vendor = await self._resolve_vendor_safely(
                 details.get("vendor_id"), details.get("vendor_url"), product.product_id
             )
+            # products.vendor_id is a foreign key: only reference a vendor row
+            # that exists, otherwise the product upsert would fail the run.
+            details = {**details, "vendor_id": vendor["vendor_id"] if vendor else None}
             yield merge_product_details(product, details)
 
     async def _resolve_only(self, stream: AsyncIterator[ProductItem]) -> AsyncIterator[ProductItem]:

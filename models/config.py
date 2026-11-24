@@ -34,9 +34,19 @@ class ProductFilter(BaseModel):
         return self.title_contains.casefold() in title.casefold()
 
     def as_sql(self) -> tuple[str, list[str]]:
+        """Return a parameterized clause matching ``matches()`` semantics.
+
+        ``%``, ``_`` and ``\\`` in the value are escaped so they match
+        literally, as in the in-memory filter.
+        """
         if self.title_contains is None:
             return "TRUE", []
-        return "title ILIKE ?", [f"%{self.title_contains}%"]
+        escaped = (
+            self.title_contains.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        return "title ILIKE ? ESCAPE '\\'", [f"%{escaped}%"]
 
 class SearchPageSelectors(BaseModel):
     model_config = ConfigDict(extra='allow')

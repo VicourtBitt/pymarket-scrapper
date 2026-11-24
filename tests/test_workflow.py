@@ -126,6 +126,16 @@ class FakeSink:
         self.updates.append((product_id, vendor_id))
 
 
+class ForeignKeySink(FakeSink):
+    """Enforces products.vendor_id -> vendors.vendor_id like PostgreSQL does."""
+
+    def load_product(self, product: dict[str, Any]) -> None:
+        saved = {data["vendor_id"] for kind, data in self.events if kind == "vendor"}
+        if product.get("vendor_id") is not None and product["vendor_id"] not in saved:
+            raise AssertionError(f"foreign key violation: vendor {product['vendor_id']!r}")
+        super().load_product(product)
+
+
 class PassThroughFilter:
     async def process(self, stream: AsyncIterator[ProductItem]) -> AsyncIterator[ProductItem]:
         async for item in stream:
@@ -270,14 +280,39 @@ def test_failed_vendor_page_is_not_cached_and_product_is_still_persisted() -> No
 
     crawler = FakeCrawler([_product("p-1"), _product("p-2")])
     vendor_crawler = FlakyVendorCrawler()
-    sink = FakeSink()
+    sink = ForeignKeySink()
 
     workflow = _workflow(crawler, vendor_crawler, sink)
     asyncio.run(workflow.enrich_and_persist(crawler.extract_search_items()))
 
     assert len(vendor_crawler.vendor_urls) == 2
     assert [kind for kind, _ in sink.events] == ["product", "vendor", "product"]
+    # The vendor row was never saved, so the product must not reference it.
+    assert sink.events[0][1]["vendor_id"] is None
+    assert sink.events[2][1]["vendor_id"] == "vendor-1"
     assert workflow.vendors.stats.failures == 1
+
+
+def test_product_without_vendor_url_keeps_an_already_persisted_vendor() -> None:
+    crawler = FakeCrawler([_product("p-1"), _product("p-2")])
+
+    async def details(product_url: str) -> dict[str, Any]:
+        crawler.product_urls.append(product_url)
+        return {
+            "vendor_id": "vendor-1",
+            "vendor_url": None if product_url.endswith("p-2") else "https://example.test/vendor-1",
+        }
+
+    crawler.extract_product_info = details  # type: ignore[method-assign]
+    sink = ForeignKeySink()
+
+    asyncio.run(_workflow(crawler, FakeVendorCrawler(), sink).enrich_and_persist(
+        crawler.extract_search_items()
+    ))
+
+    assert [(kind, data["vendor_id"]) for kind, data in sink.events] == [
+        ("vendor", "vendor-1"), ("product", "vendor-1"), ("product", "vendor-1"),
+    ]
 
 
 def test_catalog_processing_skips_vendor_without_storefront() -> None:

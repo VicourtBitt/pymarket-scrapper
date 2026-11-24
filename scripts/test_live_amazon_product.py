@@ -81,7 +81,7 @@ def product_urls(args: argparse.Namespace) -> list[tuple[str, str]]:
                 statement = statement.where(ProductRecord.product_id == args.product_id)
             if args.title_contains:
                 statement = statement.where(
-                    ProductRecord.title.ilike(f"%{args.title_contains}%")
+                    ProductRecord.title.icontains(args.title_contains, autoescape=True)
                 )
             if run_id:
                 statement = (
