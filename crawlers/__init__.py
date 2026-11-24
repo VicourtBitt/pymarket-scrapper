@@ -1,4 +1,4 @@
-from crawlers.base import BaseCrawler
-from crawlers.amazon import AmazonCrawler, AmazonSortFilter
-from crawlers.vendor import BaseVendorCrawler, AmazonVendorCrawler
-from crawlers.mercado_libre import MercadoLibre
+from crawlers.base import BaseCrawler, BaseVendorCrawler
+from crawlers.amazon import AmazonCrawler
+from crawlers.amazon_vendor import AmazonVendorCrawler
+from crawlers.mercado_libre import MercadoLibreCrawler, MercadoLibreVendorCrawler

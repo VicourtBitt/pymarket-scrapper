@@ -1,25 +1,39 @@
+"""Marketplace-agnostic crawler contracts.
+
+Product crawling (search + detail pages) and vendor crawling (seller profile +
+storefront catalog) are separate responsibilities with separate classes. Both
+receive the same injected page, sanitizer and configuration.
+"""
+
+import logging
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
-from models import ProductItem, VendorRecord
+from typing import Any, AsyncIterator, Optional
+
+from playwright.async_api import Page
+
+from crawlers.page import PageHelpers
 from include.sanitization import LocalizedSanitization
+from models import ProductItem
 from models.config import MarketplaceConfig
 
 
-class BaseCrawler(ABC):
-    """Abstract interface for marketplace-specific asynchronous crawlers."""
+class _ConfiguredCrawler(PageHelpers):
+    """Shared constructor for crawlers driven by one marketplace configuration."""
 
     def __init__(
-        self, 
-        marketplace_name: str, 
-        version: str, 
+        self,
+        page: Page,
         sanitizer: LocalizedSanitization,
-        config: MarketplaceConfig
+        config: MarketplaceConfig,
+        logger_name: Optional[str] = None,
     ) -> None:
-        """Store the injected marketplace metadata and parsing services."""
-        self.marketplace_name = marketplace_name
-        self.version = version
+        self.page = page
         self.sanitizer = sanitizer
         self.config = config
+        self.marketplace_name = config.marketplace
+        self.logger = logging.getLogger(
+            logger_name or f"pymarket_scrapper.crawlers.{type(self).__name__}"
+        )
 
     def extract_vendor_id(self, vendor_url: str) -> Optional[str]:
         """Extract a vendor ID through the injected sanitizer."""
@@ -27,29 +41,38 @@ class BaseCrawler(ABC):
             return self.sanitizer.extract_vendor_id(vendor_url)
         except (TypeError, ValueError):
             return None
-        
+
+
+class BaseCrawler(_ConfiguredCrawler, ABC):
+    """Extract products from marketplace search and product detail pages."""
+
     @abstractmethod
-    async def extract_search_items(self, search_term: str, limit: int = 50, sort_strategy: Optional[str] = None) -> AsyncIterator[ProductItem]:
+    def extract_search_items(
+        self, search_term: str, limit: int = 50, sort_strategy: Optional[str] = None
+    ) -> AsyncIterator[ProductItem]:
         """Yield products from a marketplace search page.
 
         Args:
             search_term: Marketplace query string.
             limit: Maximum number of products to yield.
-            sort_strategy: Optional marketplace-specific sort key.
-
-        Yields:
-            Marketplace product records.
+            sort_strategy: Optional ``query_parameters.sort_values`` key.
         """
-        pass
 
     @abstractmethod
-    async def extract_vendor_info(self, vendor_url: str) -> dict:
-        """Return raw vendor data extracted from a vendor page.
+    async def extract_product_info(self, product_url: str) -> dict[str, Any]:
+        """Return raw detail fields (including ``vendor_id``/``vendor_url``)."""
 
-        Args:
-            vendor_url: Vendor page URL.
 
-        Returns:
-            Marketplace-specific vendor fields as a dictionary.
-        """
-        pass
+class BaseVendorCrawler(_ConfiguredCrawler, ABC):
+    """Extract seller profiles and seller storefront catalogs."""
+
+    @abstractmethod
+    async def extract_vendor_info(self, vendor_url: str) -> dict[str, Any]:
+        """Return raw vendor fields: ``vendor_url``, ``name``,
+        ``storefront_url`` and ``seller_info``."""
+
+    @abstractmethod
+    def extract_vendor_catalog(
+        self, catalog_url: str, limit: int = 50
+    ) -> AsyncIterator[ProductItem]:
+        """Yield products listed on a vendor storefront page."""

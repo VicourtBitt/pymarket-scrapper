@@ -21,7 +21,7 @@ async def main() -> None:
         raise ValueError("CATALOG_LIMIT must be greater than zero")
 
     async with async_playwright() as playwright:
-        browser, _, crawler = await create_crawler(playwright)
+        browser, _, _, crawler = await create_crawler(playwright)
         try:
             products = [
                 item.model_dump(mode="json")

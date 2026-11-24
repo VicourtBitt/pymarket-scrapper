@@ -1,12 +1,39 @@
-from typing import AsyncIterator
-from models import VendorProfile, ProductItem
-from crawlers import BaseCrawler
+"""Mercado Libre crawler placeholders.
 
-class MercadoLibre(BaseCrawler):
-    """ The crawler implementation for the Mercado Libre website. """
+These classes satisfy the crawler contracts so the marketplace can be
+registered and wired, but extraction is not implemented yet. A
+``configs/mercado_libre.yml`` is also required before they can run.
+"""
 
-    async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
-        pass
+from typing import Any, AsyncIterator, Optional
 
-    async def extract_search_items(self, search_term: str, limit: int = 50) -> AsyncIterator[ProductItem]:
-        pass
+from crawlers.base import BaseCrawler, BaseVendorCrawler
+from models import ProductItem
+
+_NOT_IMPLEMENTED = "Mercado Libre extraction is not implemented yet"
+
+
+class MercadoLibreCrawler(BaseCrawler):
+    """Product crawler for Mercado Libre (not implemented)."""
+
+    async def extract_search_items(
+        self, search_term: str, limit: int = 50, sort_strategy: Optional[str] = None
+    ) -> AsyncIterator[ProductItem]:
+        raise NotImplementedError(_NOT_IMPLEMENTED)
+        yield  # pragma: no cover - makes this an async generator
+
+    async def extract_product_info(self, product_url: str) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_IMPLEMENTED)
+
+
+class MercadoLibreVendorCrawler(BaseVendorCrawler):
+    """Vendor crawler for Mercado Libre (not implemented)."""
+
+    async def extract_vendor_info(self, vendor_url: str) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_IMPLEMENTED)
+
+    async def extract_vendor_catalog(
+        self, catalog_url: str, limit: int = 50
+    ) -> AsyncIterator[ProductItem]:
+        raise NotImplementedError(_NOT_IMPLEMENTED)
+        yield  # pragma: no cover - makes this an async generator

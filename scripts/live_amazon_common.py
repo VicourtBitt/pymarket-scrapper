@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from crawlers.amazon import AmazonCrawler
+from crawlers.amazon_vendor import AmazonVendorCrawler
 from include import LocalizedSanitization, load_environment
 from models.config import MarketplaceConfig
 
@@ -25,7 +26,7 @@ def required_url(name: str) -> str:
 
 async def create_crawler(
     playwright: Playwright,
-) -> tuple[Browser, Page, AmazonCrawler]:
+) -> tuple[Browser, Page, AmazonCrawler, AmazonVendorCrawler]:
     load_environment()
     config = MarketplaceConfig.from_marketplace(
         os.getenv("MARKETPLACE", "amazon"),
@@ -46,4 +47,9 @@ async def create_crawler(
             "Chrome/114.0.0.0 Safari/537.36"
         )
     )
-    return browser, page, AmazonCrawler(page, sanitizer, config)
+    return (
+        browser,
+        page,
+        AmazonCrawler(page, sanitizer, config),
+        AmazonVendorCrawler(page, sanitizer, config),
+    )

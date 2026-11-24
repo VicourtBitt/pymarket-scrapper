@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("playwright")
 
 from crawlers.amazon import AmazonCrawler
+from crawlers.amazon_vendor import AmazonVendorCrawler
 from include import LocalizedSanitization
 from models.config import MarketplaceConfig
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -132,6 +133,22 @@ vendor_page:
     assert ".custom-title" in page.used_selectors
     assert ".custom-sponsored" in page.used_selectors
 
+
+
+def test_search_cards_without_product_id_are_skipped(tmp_path: Path) -> None:
+    config = detail_config()
+    config.base_url = "https://example.test/search"
+    config.search_page.product_card = ".custom-card"
+    config.search_page.id_attribute = "data-missing"
+    page = FakePage()
+    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+
+    async def collect() -> list[Any]:
+        return [item async for item in crawler.extract_search_items(
+            "seeds", limit=1, sort_strategy="best_sellers"
+        )]
+
+    assert asyncio.run(collect()) == []
 
 class DetailLocator:
     def __init__(
@@ -319,17 +336,18 @@ def test_product_and_vendor_diagnostic_stages_are_logged(caplog: pytest.LogCaptu
         }
     )
     crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+    vendor_crawler = AmazonVendorCrawler(page, LocalizedSanitization(), config)
 
     with caplog.at_level(logging.DEBUG, logger="pymarket_scrapper.crawlers.amazon"):
         asyncio.run(crawler.extract_product_info("/dp/abc"))
-        asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
+        asyncio.run(vendor_crawler.extract_vendor_info("https://example.test/vendor"))
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("product detail starts" in message for message in messages)
     assert any("product detail completes" in message for message in messages)
     assert any("extracted vendor fields vendor_id=SELLER1" in message for message in messages)
     assert any("vendor extraction starts" in message for message in messages)
-    assert any("vendor page navigation completes" in message for message in messages)
+    assert any("page navigation completes" in message for message in messages)
     assert any("storefront selector inspected" in message for message in messages)
     assert any("seller rows count=1" in message for message in messages)
     assert any("key_present=True value_present=True" in message for message in messages)
@@ -416,7 +434,7 @@ def test_extracts_vendor_info_and_catalog() -> None:
             ".catalog-card": [card],
         }
     )
-    crawler = AmazonCrawler(
+    crawler = AmazonVendorCrawler(
         page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
         detail_config(),
     )
@@ -457,7 +475,7 @@ def test_extracts_storefront_from_current_amazon_selector() -> None:
             )
         }
     )
-    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+    crawler = AmazonVendorCrawler(page, LocalizedSanitization(), config)
 
     vendor = asyncio.run(
         crawler.extract_vendor_info("https://www.amazon.com.br/seller/example")
@@ -480,7 +498,7 @@ def test_storefront_alternatives_skip_invalid_href() -> None:
             ),
         }
     )
-    crawler = AmazonCrawler(page, LocalizedSanitization(), config)
+    crawler = AmazonVendorCrawler(page, LocalizedSanitization(), config)
 
     vendor = asyncio.run(crawler.extract_vendor_info("https://example.test/vendor"))
 
@@ -498,7 +516,7 @@ def test_vendor_and_catalog_navigation_wait_for_bounded_dom_ready() -> None:
             ".catalog-card": [card],
         }
     )
-    crawler = AmazonCrawler(
+    crawler = AmazonVendorCrawler(
         page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
         detail_config(),
     )
@@ -535,7 +553,7 @@ def test_navigation_timeout_keeps_extracting_seller_info() -> None:
         },
         timeout=True,
     )
-    crawler = AmazonCrawler(
+    crawler = AmazonVendorCrawler(
         page, LocalizedSanitization(decimal_separator=",", thousands_separator="."),
         detail_config(),
     )

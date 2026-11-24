@@ -15,7 +15,7 @@ from live_amazon_common import create_crawler, required_url
 
 async def main() -> None:
     async with async_playwright() as playwright:
-        browser, _, crawler = await create_crawler(playwright)
+        browser, _, _, crawler = await create_crawler(playwright)
         try:
             result = await crawler.extract_vendor_info(required_url("VENDOR_URL"))
             print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -117,7 +117,7 @@ async def main() -> None:
         return
 
     async with async_playwright() as playwright:
-        browser, _, crawler = await create_crawler(playwright)
+        browser, _, crawler, _ = await create_crawler(playwright)
         try:
             for product_id, url in urls:
                 try:

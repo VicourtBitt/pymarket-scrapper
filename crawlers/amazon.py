@@ -1,194 +1,33 @@
-from html.parser import HTMLParser
-import logging
-from enum import Enum
-from typing import AsyncIterator, Optional
-from urllib.parse import urlencode, urljoin, urlparse
+"""Configuration-driven Amazon product crawler (search and detail pages)."""
 
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from typing import Any, AsyncIterator, Optional
+from urllib.parse import urlencode, urljoin
 
+from playwright.async_api import Page
+
+from crawlers.base import BaseCrawler
 from include import LocalizedSanitization
-from models import ProductItem, VendorProfile
+from models import ProductItem
 from models.config import MarketplaceConfig
-from crawlers import BaseCrawler
-
-
-class _HtmlText(HTMLParser):
-    """Convert configured HTML content to plain text without script/style content."""
-
-    def __init__(self, value: str) -> None:
-        super().__init__()
-        self._ignored = 0
-        self._parts: list[str] = []
-        self.feed(value)
-        self.text = " ".join("".join(self._parts).split()) or None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        if tag in {"script", "style"}:
-            self._ignored += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in {"script", "style"} and self._ignored:
-            self._ignored -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self._ignored:
-            self._parts.append(data)
-
-
-class AmazonSortFilter(Enum):
-    """Compatibility names for configuration keys, not Amazon sort values."""
-    BEST_SELLERS = "best_sellers"
-    PRICE_ASC = "price_asc"
-    PRICE_DESC = "price_desc"
-    REVIEWS = "reviews"
-    NEWEST = "newest"
-    RELEVANCE = "relevance"
 
 
 class AmazonCrawler(BaseCrawler):
-    """Extract configured Amazon search, product, vendor, and catalog data."""
+    """Extract configured Amazon search results and product detail pages.
 
-    _DEFAULT_BASE_URL = "https://www.amazon.com.br/"
-    _NAVIGATION_TIMEOUT_MS = 30_000
+    Vendor profiles and storefront catalogs are handled by
+    ``crawlers.amazon_vendor.AmazonVendorCrawler``.
+    """
 
     def __init__(self, page: Page, sanitizer: LocalizedSanitization, config: MarketplaceConfig) -> None:
-        """Initialize the crawler with injected browser and marketplace services.
-
-        Args:
-            page: Playwright page used for all navigation and locator queries.
-            sanitizer: Locale-aware parser for prices and marketplace IDs.
-            config: Validated selectors and URL/query configuration.
-        """
-        super().__init__(
-            marketplace_name=config.marketplace or "amazon",
-            version="1.0.0",
-            sanitizer=sanitizer,
-            config=config,
-        )
-        self.page = page
-        self.logger = logging.getLogger("pymarket_scrapper.crawlers.amazon")
+        super().__init__(page, sanitizer, config, "pymarket_scrapper.crawlers.amazon")
 
     def _normalize_product_url(self, product_url: str) -> str:
         """Return an absolute product URL using the configured base URL."""
-        return urljoin(self.config.base_url or self._DEFAULT_BASE_URL, product_url)
+        if not self.config.base_url:
+            raise ValueError("Amazon marketplace configuration must define base_url")
+        return urljoin(self.config.base_url, product_url)
 
-    def _is_navigable_http_url(self, url: str) -> bool:
-        """Return whether a resolved URL can safely be opened by Playwright."""
-        parsed = urlparse(url)
-        return parsed.scheme.casefold() in {"http", "https"} and bool(parsed.netloc)
-
-    @staticmethod
-    def _selector_alternatives(selector: Optional[str]) -> list[str]:
-        """Return non-empty CSS selector alternatives in configuration order."""
-        if not selector:
-            return []
-        return [candidate.strip() for candidate in selector.split(",") if candidate.strip()]
-
-    async def _goto_dom_ready(self, url: str) -> None:
-        """Navigate until the DOM is ready, tolerating only navigation timeouts."""
-        self.logger.info("vendor page navigation starts url=%s", url)
-        try:
-            await self.page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=self._NAVIGATION_TIMEOUT_MS,
-            )
-        except PlaywrightTimeoutError:
-            self.logger.warning(
-                "Amazon navigation timed out after DOM-ready wait; continuing extraction: %s",
-                url,
-            )
-        self.logger.info("vendor page navigation completes url=%s", url)
-
-    async def extract_vendor_info(self, vendor_url: str) -> dict:
-        """Extract configured seller identity, storefront, and seller fields.
-
-        Args:
-            vendor_url: Vendor page URL to navigate to.
-
-        Returns:
-            Raw vendor fields including ``vendor_url``, ``name``,
-            ``storefront_url``, and ``seller_info``.
-        """
-        selectors = self.config.vendor_page
-        self.logger.info("vendor extraction starts url=%s", vendor_url)
-        await self._goto_dom_ready(vendor_url)
-
-        storefront_url = None
-        for storefront_selector in self._selector_alternatives(selectors.storefront_href):
-            self.logger.debug(
-                "storefront selector inspected selector=%s", storefront_selector
-            )
-            try:
-                storefront = self.page.locator(storefront_selector).first
-                if await storefront.count() == 0:
-                    self.logger.debug(
-                        "storefront selector href result selector=%s found=false",
-                        storefront_selector,
-                    )
-                    continue
-                href = await storefront.get_attribute("href")
-                if not href:
-                    self.logger.debug(
-                        "storefront selector href result selector=%s found=true href_present=false",
-                        storefront_selector,
-                    )
-                    continue
-                candidate = urljoin(vendor_url, href.strip())
-                self.logger.debug(
-                    "storefront selector href result selector=%s found=true "
-                    "href_present=true href=%s",
-                    storefront_selector,
-                    candidate,
-                )
-                if self._is_navigable_http_url(candidate):
-                    storefront_url = candidate
-                    break
-                self.logger.debug(
-                    "Ignoring non-navigable Amazon storefront URL from %s: %s",
-                    storefront_selector,
-                    candidate,
-                )
-            except Exception as exc:
-                # A stale or malformed optional selector must not prevent the
-                # seller identity and other seller fields from being extracted.
-                self.logger.warning(
-                    "Unable to inspect Amazon storefront selector %s: %s",
-                    storefront_selector,
-                    exc,
-                )
-
-        name = await self._optional_text(selectors.name)
-        seller_info: dict[str, str] = {}
-        if selectors.seller_info_row:
-            rows = await self.page.locator(selectors.seller_info_row).all()
-            self.logger.info("seller rows count=%d", len(rows))
-            for row in rows:
-                key = await self._optional_text_from(row, selectors.seller_info_key)
-                value = await self._optional_text_from(row, selectors.seller_info_value)
-                self.logger.debug(
-                    "seller row extracted key_present=%s value_present=%s",
-                    bool(key),
-                    bool(value),
-                )
-                if key and value:
-                    seller_info[key] = value
-
-        result = {
-            "vendor_url": vendor_url,
-            "name": name,
-            "storefront_url": storefront_url,
-            "seller_info": seller_info,
-        }
-        self.logger.info(
-            "vendor extraction completes url=%s storefront_present=%s seller_fields=%d",
-            vendor_url,
-            bool(storefront_url),
-            len(seller_info),
-        )
-        return result
-
-    async def extract_product_info(self, product_url: str) -> dict:
+    async def extract_product_info(self, product_url: str) -> dict[str, Any]:
         """Extract configured product details from an Amazon product page.
 
         Args:
@@ -276,102 +115,6 @@ class AmazonCrawler(BaseCrawler):
         )
         return result
 
-    async def extract_vendor_catalog(
-        self, vendor_url: str, limit: int = 50
-    ) -> AsyncIterator[ProductItem]:
-        """Yield products listed on a configured vendor catalog page.
-
-        Args:
-            vendor_url: Catalog or storefront URL to navigate to.
-            limit: Maximum number of catalog cards to inspect.
-
-        Yields:
-            Product records parsed from configured catalog cards.
-
-        Raises:
-            ValueError: If the catalog page or product-card selector is absent.
-        """
-        selectors = self.config.vendor_catalog_page
-        if selectors is None or not selectors.product_card:
-            raise ValueError(
-                "Amazon marketplace configuration must define vendor_catalog_page"
-            )
-        self.logger.info("catalog extraction starts url=%s", vendor_url)
-        await self._goto_dom_ready(vendor_url)
-
-        cards = await self.page.locator(selectors.product_card).all()
-        self.logger.info("catalog extraction cards=%d", min(len(cards), limit))
-        for card in cards[:limit]:
-            product_id = await card.get_attribute(
-                selectors.product_id_attribute or "data-asin"
-            )
-            if not product_id:
-                self.logger.warning("Skipping vendor catalog card without product ID")
-                continue
-
-            title = await self._optional_text_from(card, self.config.search_page.title)
-            url = await self._optional_attribute_from(
-                card, self.config.search_page.url, "href"
-            )
-            price_text = await self._optional_text_from(card, self.config.search_page.price)
-            yield ProductItem(
-                product_id=product_id,
-                title=title or product_id,
-                url=url or vendor_url,
-                price=self.sanitizer.parse_price(price_text or ""),
-                currency=(
-                    self.sanitizer.extract_currency_symbol(price_text or "")
-                    or self.sanitizer.default_currency_fallback
-                ),
-                vendor_id=self.extract_vendor_id(vendor_url),
-            )
-
-    async def _optional_text(self, selector: Optional[str]) -> Optional[str]:
-        if not selector:
-            return None
-        return await self._optional_text_from(self.page, selector)
-
-    async def _optional_text_from(self, owner: object, selector: Optional[str]) -> Optional[str]:
-        if not selector:
-            return None
-        locator = owner.locator(selector).first
-        if await locator.count() == 0:
-            return None
-        value = (await locator.inner_text()).strip()
-        return value or None
-
-    async def _optional_attribute_from(
-        self, owner: object, selector: Optional[str], attribute: str
-    ) -> Optional[str]:
-        if not selector:
-            return None
-        locator = owner.locator(selector).first
-        if await locator.count() == 0:
-            return None
-        return await locator.get_attribute(attribute)
-
-    async def _optional_html_text(self, selector: Optional[str]) -> Optional[str]:
-        if not selector:
-            return None
-        locator = self.page.locator(selector).first
-        if await locator.count() == 0:
-            return None
-        if hasattr(locator, "inner_html"):
-            return _HtmlText(await locator.inner_html()).text
-        return (await locator.inner_text()).strip() or None
-
-    async def _all_text(self, selector: Optional[str]) -> list[str]:
-        if not selector:
-            return []
-        return [
-            value
-            for value in [
-                (await item.inner_text()).strip()
-                for item in await self.page.locator(selector).all()
-            ]
-            if value
-        ]
-
     async def _extract_reviews(self, selectors: object) -> list[dict[str, str]]:
         if selectors is None or not getattr(selectors, "review_card", None):
             return []
@@ -397,19 +140,6 @@ class AmazonCrawler(BaseCrawler):
             return "".join(parts)
         return (await self._optional_text(getattr(selectors, "price", None))) or ""
 
-    async def extract_vendor_profile(self, vendor_url: str) -> AsyncIterator[VendorProfile]:
-        """Retain the previous profile interface without emitting records.
-
-        Args:
-            vendor_url: Vendor URL recorded in the diagnostic log.
-
-        Yields:
-            No profiles; current workflow uses ``extract_vendor_info``.
-        """
-        self.logger.info("Extracting vendor profile from %s", vendor_url)
-        if False:
-            yield VendorProfile()
-
     async def extract_search_items(
         self, search_term: str, limit: int = 50,
         sort_strategy: Optional[str] = None
@@ -419,7 +149,7 @@ class AmazonCrawler(BaseCrawler):
         Args:
             search_term: Marketplace search query.
             limit: Maximum number of eligible products to yield.
-            sort_strategy: Configuration key or ``AmazonSortFilter`` value.
+            sort_strategy: A ``query_parameters.sort_values`` key.
 
         Yields:
             Product records with normalized URLs, prices, currencies, and IDs.
@@ -433,11 +163,7 @@ class AmazonCrawler(BaseCrawler):
             raise ValueError("Amazon marketplace configuration must define base_url")
         query = {self.config.query_parameters.search_key: search_term}
         if sort_strategy:
-            sort_name = (
-                sort_strategy.value
-                if isinstance(sort_strategy, AmazonSortFilter)
-                else str(sort_strategy).lower()
-            )
+            sort_name = str(sort_strategy).lower()
             configured_sort = getattr(self.config.query_parameters.sort_values, sort_name, None)
             if configured_sort is None:
                 raise ValueError(f"Sort filter is not configured: {sort_name}")
@@ -480,6 +206,11 @@ class AmazonCrawler(BaseCrawler):
                     url_path = await link_element.get_attribute("href")
 
                     product_id = await card.get_attribute(selectors.id_attribute)
+                    if not product_id:
+                        self.logger.warning(
+                            "Skipping search card without %s", selectors.id_attribute
+                        )
+                        continue
 
                     price = 0.0
                     currency = None
@@ -497,7 +228,7 @@ class AmazonCrawler(BaseCrawler):
                     continue
 
                 product = ProductItem(
-                    product_id=product_id or "N/A",
+                    product_id=product_id,
                     title=title,
                     url=(self._normalize_product_url(url_path) if url_path else None),
                     price=price,

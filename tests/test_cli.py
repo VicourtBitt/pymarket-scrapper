@@ -1,14 +1,9 @@
 """Offline tests for the Typer entry point."""
 
-import asyncio
-import logging
-from collections.abc import AsyncIterator
-from typing import Any
-
 from typer.testing import CliRunner
 
 import main
-from models import ProductItem
+from pipeline import ExtractionMode
 
 
 def test_cli_exposes_expected_options_without_starting_services() -> None:
@@ -45,7 +40,7 @@ def test_cli_passes_defaults_and_mode_to_async_workflow(monkeypatch) -> None:
 
     assert result.exit_code == 0
     args = received["args"]
-    assert args[0] is main.ExtractionMode.VENDOR
+    assert args[0] is ExtractionMode.VENDOR
     assert args[1:4] == ("x", 3, "amazon")
     assert args[4:8] == ("relevance", True, True, True)
     assert args[9] == "  seeds  "
@@ -71,85 +66,37 @@ def test_cli_product_filter_option_takes_precedence_over_environment(monkeypatch
     assert main._cli_product_filter("   ").title_contains is None
 
 
-class _RecordingSink:
-    def __init__(self) -> None:
-        self.products: list[dict[str, Any]] = []
+def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
+    """_run_cli builds both crawlers and forwards CLI options to the workflow."""
+    import asyncio
+    import logging
+    from typing import Any
 
-    def load_product(self, product: dict[str, Any]) -> None:
-        self.products.append(product)
+    received: dict[str, Any] = {}
 
-
-class _PassThroughFilter:
-    async def process(
-        self, stream: AsyncIterator[ProductItem]
-    ) -> AsyncIterator[ProductItem]:
-        async for product in stream:
-            yield product
-
-
-async def _search_products() -> AsyncIterator[ProductItem]:
-    for product_id in ("product-1", "product-1", "product-2"):
-        yield ProductItem(
-            product_id=product_id,
-            title=f"Product {product_id}",
-            url=f"https://example.test/{product_id}",
-            price=1.0,
-            currency="USD",
-            vendor_id=None,
-        )
-
-
-def test_search_only_product_persistence_deduplicates_without_detail_work() -> None:
-    sink = _RecordingSink()
-
-    asyncio.run(
-        main._persist_search_products(
-            _search_products(), sink, _PassThroughFilter()  # type: ignore[arg-type]
-        )
-    )
-
-    assert [product["product_id"] for product in sink.products] == [
-        "product-1",
-        "product-2",
-    ]
-
-
-def test_vendor_cli_logs_storefront_catalog_decision(monkeypatch, caplog) -> None:
-    """Vendor mode explains whether the optional catalog phase will run."""
-    events: list[str] = []
-
-    class _Sink:
-        def close(self) -> None:
+    class _Closeable:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             return None
 
-    class _Filter:
         @classmethod
-        def __class_getitem__(cls, item: object) -> type["_Filter"]:
+        def __class_getitem__(cls, item: object) -> type:
             return cls
 
-        def __init__(self, **kwargs: Any) -> None:
-            return None
-
         def close(self) -> None:
-            return None
-
-    class _Page:
-        pass
-
-    class _Context:
-        async def new_page(self) -> _Page:
-            return _Page()
+            received.setdefault("closed", 0)
+            received["closed"] += 1
 
     class _Browser:
-        async def new_context(self, **kwargs: Any) -> _Context:
-            return _Context()
+        async def new_context(self, **kwargs: Any) -> "_Browser":
+            return self
+
+        async def new_page(self) -> object:
+            return object()
 
         async def close(self) -> None:
-            return None
+            received["browser_closed"] = True
 
     class _Playwright:
-        chromium: "_Playwright"
-
         def __init__(self) -> None:
             self.chromium = self
 
@@ -160,79 +107,43 @@ def test_vendor_cli_logs_storefront_catalog_decision(monkeypatch, caplog) -> Non
             return None
 
         async def launch(self, **kwargs: Any) -> _Browser:
+            received["headless"] = kwargs["headless"]
             return _Browser()
 
-    class _Crawler:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            return None
+    class _Workflow:
+        def __init__(self, **kwargs: Any) -> None:
+            received["components"] = sorted(kwargs)
 
-        async def extract_search_items(self, *args: Any, **kwargs: Any) -> AsyncIterator[ProductItem]:
-            if False:
-                yield ProductItem(
-                    product_id="unused",
-                    title="unused",
-                    url="https://example.test/unused",
-                    price=1.0,
-                    currency="USD",
-                )
+        async def run(self, mode: Any, search: str, **kwargs: Any) -> None:
+            received["run"] = (mode, search, kwargs)
 
-    monkeypatch.setattr(main, "configure_logging", lambda *args, **kwargs: logging.getLogger("test.vendor-cli"))
-    monkeypatch.setattr(main, "MarketplaceConfig", type("_Config", (), {
-        "from_marketplace": staticmethod(lambda *args, **kwargs: object()),
-    }))
-    monkeypatch.setattr(main, "PostgreSQLSink", lambda *args, **kwargs: _Sink())
-    monkeypatch.setattr(main, "SQLFilter", _Filter)
-    monkeypatch.setattr(main, "async_playwright", lambda: _Playwright())
-    monkeypatch.setattr(main, "AmazonCrawler", _Crawler)
-    monkeypatch.setattr(
-        main,
-        "_filter_search_products",
-        lambda stream, product_filter: stream,
+    monkeypatch.setattr(main, "configure_logging", lambda *a, **k: logging.getLogger("test.cli"))
+    monkeypatch.setattr(main.MarketplaceConfig, "from_marketplace", staticmethod(lambda *a, **k: object()))
+    monkeypatch.setattr(main, "PostgreSQLSink", _Closeable)
+    monkeypatch.setattr(main, "SQLFilter", _Closeable)
+    monkeypatch.setattr(main, "async_playwright", _Playwright)
+    monkeypatch.setattr(main, "AmazonCrawler", lambda *a: "crawler")
+    monkeypatch.setattr(main, "AmazonVendorCrawler", lambda *a: "vendor_crawler")
+    monkeypatch.setattr(main, "ExtractionWorkflow", _Workflow)
+
+    asyncio.run(main._run_cli(
+        ExtractionMode.VENDOR, "seeds", 3, "amazon", "relevance",
+        True, False, True, "sqlite:///test.db",
+    ))
+
+    assert received["headless"] is True
+    assert received["components"] == [
+        "crawler", "logger", "product_filter", "sink", "sql_filter", "vendor_crawler",
+    ]
+    assert received["run"] == (
+        ExtractionMode.VENDOR,
+        "seeds",
+        {
+            "limit": 3,
+            "sort_strategy": "relevance",
+            "storefront_products": False,
+            "recursive_vendors": True,
+        },
     )
-
-    async def fake_resolve(*args: Any, **kwargs: Any) -> dict[str, dict[str, Any]]:
-        return {}
-
-    async def fake_process(*args: Any, **kwargs: Any) -> None:
-        events.append("process")
-
-    monkeypatch.setattr(main, "_resolve_vendors_from_search", fake_resolve)
-    monkeypatch.setattr(main, "_process_vendor_catalogs", fake_process)
-
-    caplog.set_level(logging.INFO, logger="test.vendor-cli")
-    asyncio.run(
-        main._run_cli(
-            main.ExtractionMode.VENDOR,
-            "seeds",
-            1,
-            "amazon",
-            None,
-            False,
-            False,
-            True,
-            "sqlite:///test.db",
-        )
-    )
-
-    assert events == []
-    assert (
-        "Vendor mode: catalog extraction skipped because "
-        "--storefront-products was not supplied"
-    ) in caplog.text
-
-    asyncio.run(
-        main._run_cli(
-            main.ExtractionMode.VENDOR,
-            "seeds",
-            1,
-            "amazon",
-            None,
-            False,
-            True,
-            True,
-            "sqlite:///test.db",
-        )
-    )
-
-    assert events == ["process"]
-    assert "Vendor mode: about to process storefront catalogs" in caplog.text
+    assert received["browser_closed"] is True
+    assert received["closed"] == 2
