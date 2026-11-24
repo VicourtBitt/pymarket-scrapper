@@ -2,7 +2,7 @@ import duckdb
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Generic, Optional, TypeVar
+from typing import Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel
 
