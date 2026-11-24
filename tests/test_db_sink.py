@@ -6,7 +6,8 @@ from typing import Any, List
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from pipeline.db_sink import PostgreSQLSink
+from models import ExtractionRunRequest
+from pipeline.db_sink import PostgreSQLSink, observation_hash
 
 
 class RecordingSession:
@@ -84,3 +85,83 @@ def test_load_vendor_upsert_persists_cnpj_storefront_and_accepts_missing_fields(
     assert legacy.params["storefront_url"] is None
     assert 'cnpj = excluded.cnpj' in str(supplied)
     assert 'storefront_url = excluded.storefront_url' in str(supplied)
+
+
+def _recording_sink() -> tuple[PostgreSQLSink, List[Any]]:
+    sink = PostgreSQLSink("sqlite:///offline-test.db", marketplace="amazon")
+    statements: List[Any] = []
+    sink.SessionLocal = lambda: RecordingSession(statements)  # type: ignore[method-assign]
+    return sink, statements
+
+
+def _compiled(statement: Any) -> Any:
+    return statement.compile(dialect=postgresql.dialect())
+
+
+PRODUCT = {
+    "product_id": "p-1",
+    "title": "Seeds",
+    "url": "https://example.test/p-1",
+    "price": 4.2,
+    "currency": "BRL",
+    "vendor_id": None,
+    "metadata": {},
+}
+
+
+def test_products_are_observed_only_while_a_search_is_open() -> None:
+    sink, statements = _recording_sink()
+
+    sink.load_product(PRODUCT)
+    assert len(statements) == 1
+
+    run_id = sink.start_run(ExtractionRunRequest(marketplace="amazon", source="test"))
+    search_id = sink.start_search("seeds", "relevance", 10)
+    sink.load_product(PRODUCT)
+    sink.load_product({**PRODUCT, "product_id": "p-2"})
+    sink.finish_search("succeeded", rows_extracted=2)
+    sink.load_product(PRODUCT)
+    sink.finish_run("succeeded", rows_extracted=2)
+
+    tables = [statement.table.name for statement in statements]
+    assert tables == [
+        "products",
+        "extraction_runs",
+        "extraction_searches",
+        "products", "product_observations",
+        "products", "product_observations",
+        "extraction_searches",
+        "products",
+        "extraction_runs",
+    ]
+    first_observation = _compiled(statements[4]).params
+    second_observation = _compiled(statements[6]).params
+    assert first_observation["search_id"] == search_id
+    assert (first_observation["position"], second_observation["position"]) == (1, 2)
+    assert first_observation["row_hash"] == observation_hash(PRODUCT)
+    assert "ON CONFLICT ON CONSTRAINT uq_observation_search_product_hash DO NOTHING" in str(
+        _compiled(statements[4])
+    )
+    run_insert = _compiled(statements[1]).params
+    assert run_insert["run_id"] == run_id and run_insert["status"] == "running"
+    run_update = _compiled(statements[-1]).params
+    assert run_update["status"] == "succeeded"
+    assert run_update["rows_loaded"] == 3
+    assert run_update["rows_failed"] == 0
+
+
+def test_run_marketplace_must_match_sink() -> None:
+    sink, _ = _recording_sink()
+    with pytest.raises(ValueError):
+        sink.start_run(ExtractionRunRequest(marketplace="mercado_libre"))
+
+
+def test_search_requires_a_run() -> None:
+    sink, _ = _recording_sink()
+    with pytest.raises(RuntimeError):
+        sink.start_search("seeds")
+
+
+def test_observation_hash_ignores_identity_and_detects_changes() -> None:
+    assert observation_hash(PRODUCT) == observation_hash({**PRODUCT, "product_id": "other"})
+    assert observation_hash(PRODUCT) != observation_hash({**PRODUCT, "price": 5.0})

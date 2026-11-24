@@ -143,7 +143,12 @@ def test_run_cli_wires_crawlers_and_workflow_options(monkeypatch) -> None:
             "sort_strategy": "relevance",
             "storefront_products": False,
             "recursive_vendors": True,
+            "run_request": received["run"][2]["run_request"],
         },
     )
+    run_request = received["run"][2]["run_request"]
+    assert run_request.marketplace == "amazon"
+    assert run_request.source == "cli"
+    assert run_request.metadata["extraction"] == "vendor"
     assert received["browser_closed"] is True
     assert received["closed"] == 2

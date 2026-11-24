@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from collections.abc import Iterator
 from typing import Any, Callable, Dict, Optional
@@ -5,14 +7,41 @@ from typing import Any, Callable, Dict, Optional
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
-from models import VendorRecord, ProductRecord
+from models import (
+    ExtractionRun,
+    ExtractionRunRequest,
+    ExtractionSearch,
+    ProductObservation,
+    ProductRecord,
+    VendorRecord,
+)
+from models.database import new_id, utc_now
 
 IdentityResolver = Callable[[Dict[str, Any]], Optional[str]]
 logger = logging.getLogger("pymarket_scrapper.pipeline.db_sink")
 
 
+RUN_RUNNING = "running"
+RUN_SUCCEEDED = "succeeded"
+RUN_FAILED = "failed"
+
+_OBSERVED_FIELDS = ("title", "url", "price", "currency", "vendor_id", "metadata")
+
+
+def observation_hash(product_data: Dict[str, Any]) -> str:
+    """Stable hash of the observed product fields (identical rows share it)."""
+    payload = {field: product_data.get(field) for field in _OBSERVED_FIELDS}
+    encoded = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class PostgreSQLSink:
-    """Persist vendors and products with PostgreSQL upserts."""
+    """Persist vendors and products with PostgreSQL upserts.
+
+    Optionally tracks an extraction run: between ``start_search`` and
+    ``finish_search`` every loaded product also records an immutable
+    ``ProductObservation`` in the same transaction as its upsert.
+    """
 
     def __init__(
         self,
@@ -34,6 +63,11 @@ class PostgreSQLSink:
         self.engine = create_engine(connection_url, echo=False, pool_size=5, max_overflow=10)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.identity_resolver = identity_resolver
+        self.run_id: Optional[str] = None
+        self.search_id: Optional[str] = None
+        self._search_position = 0
+        self.rows_loaded = 0
+        self.rows_failed = 0
 
     def close(self) -> None:
         """Release pooled database connections."""
@@ -128,11 +162,138 @@ class PostgreSQLSink:
         with self.SessionLocal() as session:
             try:
                 session.execute(upsert_stmt)
+                if self.search_id is not None:
+                    session.execute(self._observation_statement(product_data))
                 session.commit()
             except Exception:
                 session.rollback()
+                self.rows_failed += 1
                 logger.exception("Unable to persist product %s", product_data.get("product_id"))
                 raise
+        self.rows_loaded += 1
+
+    def _observation_statement(self, product_data: Dict[str, Any]) -> Any:
+        self._search_position += 1
+        return insert(ProductObservation).values(
+            observation_id=new_id(),
+            search_id=self.search_id,
+            product_id=product_data["product_id"],
+            observed_at=utc_now(),
+            title=product_data.get("title"),
+            url=product_data.get("url"),
+            price=product_data.get("price"),
+            currency=product_data.get("currency"),
+            vendor_id=product_data.get("vendor_id"),
+            position=self._search_position,
+            raw_payload=json.loads(json.dumps(product_data, default=str)),
+            row_hash=observation_hash(product_data),
+        ).on_conflict_do_nothing(constraint="uq_observation_search_product_hash")
+
+    # ------------------------------------------------------------ run lifecycle
+    def _execute(self, statement: Any, description: str) -> None:
+        with self.SessionLocal() as session:
+            try:
+                session.execute(statement)
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("Unable to %s", description)
+                raise
+
+    def start_run(self, request: ExtractionRunRequest) -> str:
+        """Create a ``running`` extraction run and reset the sink counters."""
+        if request.marketplace != self.marketplace:
+            raise ValueError(
+                f"run marketplace {request.marketplace!r} does not match sink "
+                f"marketplace {self.marketplace!r}"
+            )
+        run_id = new_id()
+        self._execute(
+            insert(ExtractionRun).values(
+                run_id=run_id,
+                marketplace=self.marketplace,
+                status=RUN_RUNNING,
+                started_at=utc_now(),
+                config_hash=request.config_hash,
+                requested_by=request.requested_by,
+                source=request.source,
+                rows_extracted=0,
+                rows_loaded=0,
+                rows_failed=0,
+                metadata_blob=request.metadata,
+            ),
+            "start extraction run",
+        )
+        self.run_id = run_id
+        self.rows_loaded = 0
+        self.rows_failed = 0
+        return run_id
+
+    def start_search(
+        self,
+        search_term: str,
+        sort_strategy: Optional[str] = None,
+        requested_limit: Optional[int] = None,
+    ) -> str:
+        """Open a search within the current run; products are observed until
+        ``finish_search``."""
+        if self.run_id is None:
+            raise RuntimeError("start_run must be called before start_search")
+        search_id = new_id()
+        self._execute(
+            insert(ExtractionSearch).values(
+                search_id=search_id,
+                run_id=self.run_id,
+                search_term=search_term,
+                sort_strategy=sort_strategy,
+                requested_limit=requested_limit,
+                rows_extracted=0,
+                status=RUN_RUNNING,
+                started_at=utc_now(),
+            ),
+            "start extraction search",
+        )
+        self.search_id = search_id
+        self._search_position = 0
+        return search_id
+
+    def finish_search(self, status: str, rows_extracted: int = 0) -> None:
+        """Close the open search; later products are no longer observed."""
+        if self.search_id is None:
+            return
+        search_id, self.search_id = self.search_id, None
+        self._execute(
+            update(ExtractionSearch)
+            .where(ExtractionSearch.search_id == search_id)
+            .values(status=status, rows_extracted=rows_extracted, finished_at=utc_now()),
+            "finish extraction search",
+        )
+
+    def finish_run(
+        self,
+        status: str,
+        rows_extracted: int = 0,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Close the current run with its final counters."""
+        if self.run_id is None:
+            return
+        if self.search_id is not None:
+            self.finish_search(status)
+        run_id, self.run_id = self.run_id, None
+        self._execute(
+            update(ExtractionRun)
+            .where(ExtractionRun.run_id == run_id)
+            .values(
+                status=status,
+                finished_at=utc_now(),
+                rows_extracted=rows_extracted,
+                rows_loaded=self.rows_loaded,
+                rows_failed=self.rows_failed,
+                error_message=(error_message or None) and error_message[:4000],
+            ),
+            "finish extraction run",
+        )
 
     def iter_products_without_vendor(
         self, *, batch_size: int = 100

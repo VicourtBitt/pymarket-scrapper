@@ -9,11 +9,11 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, runtime_checkable
 from urllib.parse import urljoin
 
 from crawlers.base import BaseCrawler, BaseVendorCrawler
-from models import ProductItem
+from models import ExtractionRunRequest, ProductItem
 from models.config import ProductFilter
 from pipeline.deduplicator import Deduplicator
 from pipeline.engine import Pipeline, PipelineStats, Stage
@@ -34,6 +34,24 @@ class WorkflowSink(Protocol):
     def load_product(self, product_data: dict[str, Any]) -> None: ...
 
     def load_vendor(self, vendor_data: dict[str, Any]) -> None: ...
+
+
+@runtime_checkable
+class RunTracker(Protocol):
+    """Optional sink capability: record extraction runs and searches."""
+
+    def start_run(self, request: ExtractionRunRequest) -> str: ...
+
+    def start_search(
+        self, search_term: str, sort_strategy: Optional[str] = None,
+        requested_limit: Optional[int] = None,
+    ) -> str: ...
+
+    def finish_search(self, status: str, rows_extracted: int = 0) -> None: ...
+
+    def finish_run(
+        self, status: str, rows_extracted: int = 0, error_message: Optional[str] = None
+    ) -> None: ...
 
 
 @dataclass
@@ -130,29 +148,54 @@ class ExtractionWorkflow:
         sort_strategy: Optional[str] = None,
         storefront_products: bool = False,
         recursive_vendors: bool = False,
+        run_request: Optional[ExtractionRunRequest] = None,
     ) -> PipelineStats:
-        """Execute one extraction job and return the search pipeline counts."""
+        """Execute one extraction job and return the search pipeline counts.
+
+        When ``run_request`` is given and the sink is a ``RunTracker``, the job
+        is recorded as an extraction run with one search; products loaded by
+        the search pipeline are recorded as observations of that search.
+        """
+        tracker = self.sink if run_request and isinstance(self.sink, RunTracker) else None
+        stats = PipelineStats()
+        if tracker is not None:
+            tracker.start_run(run_request)
+        try:
+            if tracker is not None:
+                tracker.start_search(search_term, sort_strategy, limit)
+            stats = await self._run_search(mode, search_term, limit, sort_strategy)
+            if tracker is not None:
+                tracker.finish_search("succeeded", stats.extracted)
+
+            # "all" always includes the vendors' storefront catalogs.
+            if storefront_products or mode is ExtractionMode.ALL:
+                await self.process_vendor_catalogs()
+            else:
+                self.logger.info(
+                    "catalog extraction skipped because --storefront-products was not supplied"
+                )
+            if recursive_vendors:
+                await self.backfill_product_vendors()
+        except BaseException as exc:
+            if tracker is not None:
+                tracker.finish_run("failed", stats.extracted, f"{type(exc).__name__}: {exc}")
+            raise
+        if tracker is not None:
+            tracker.finish_run("succeeded", stats.extracted)
+        return stats
+
+    async def _run_search(
+        self, mode: ExtractionMode, search_term: str, limit: int,
+        sort_strategy: Optional[str],
+    ) -> PipelineStats:
         stream = self.crawler.extract_search_items(
             search_term, limit=limit, sort_strategy=sort_strategy
         )
         if mode is ExtractionMode.PRODUCT:
-            stats = await self.persist_search_products(stream)
-        elif mode is ExtractionMode.VENDOR:
-            stats = await self.resolve_vendors(stream)
-        else:
-            stats = await self.enrich_and_persist(stream)
-            # "all" always includes the vendors' storefront catalogs.
-            storefront_products = True
-
-        if storefront_products:
-            await self.process_vendor_catalogs()
-        else:
-            self.logger.info(
-                "catalog extraction skipped because --storefront-products was not supplied"
-            )
-        if recursive_vendors:
-            await self.backfill_product_vendors()
-        return stats
+            return await self.persist_search_products(stream)
+        if mode is ExtractionMode.VENDOR:
+            return await self.resolve_vendors(stream)
+        return await self.enrich_and_persist(stream)
 
     async def persist_search_products(self, stream: AsyncIterator[ProductItem]) -> PipelineStats:
         """Search-only mode: dedupe, filter and persist without detail requests."""

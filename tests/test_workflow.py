@@ -5,7 +5,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
-from models import ProductItem
+from models import ExtractionRunRequest, ProductItem
 from models.config import ProductFilter
 from pipeline import ExtractionMode, ExtractionWorkflow, Pipeline
 from pipeline.normalization import normalize_vendor
@@ -321,3 +321,70 @@ def test_backfill_resolves_vendors_through_the_shared_cache() -> None:
 
     assert sink.updates == [("a", "vendor-1"), ("b", "vendor-1")]
     assert vendor_crawler.vendor_urls == ["https://example.test/vendor-1"]
+
+
+class TrackingSink(FakeSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lifecycle: list[tuple[Any, ...]] = []
+
+    def start_run(self, request: ExtractionRunRequest) -> str:
+        self.lifecycle.append(("start_run", request.marketplace))
+        return "run-1"
+
+    def start_search(self, search_term: str, sort_strategy=None, requested_limit=None) -> str:
+        self.lifecycle.append(("start_search", search_term, sort_strategy, requested_limit))
+        return "search-1"
+
+    def finish_search(self, status: str, rows_extracted: int = 0) -> None:
+        self.lifecycle.append(("finish_search", status, rows_extracted))
+
+    def finish_run(self, status: str, rows_extracted: int = 0, error_message=None) -> None:
+        self.lifecycle.append(("finish_run", status, rows_extracted, error_message))
+
+
+def test_run_is_tracked_around_search_and_catalog_phases() -> None:
+    crawler = FakeCrawler([_product("p-1"), _product("p-2")])
+    sink = TrackingSink()
+
+    asyncio.run(
+        _workflow(crawler, FakeVendorCrawler(), sink).run(
+            ExtractionMode.ALL, "seeds", limit=5, sort_strategy="relevance",
+            run_request=ExtractionRunRequest(marketplace="amazon"),
+        )
+    )
+
+    assert sink.lifecycle == [
+        ("start_run", "amazon"),
+        ("start_search", "seeds", "relevance", 5),
+        ("finish_search", "succeeded", 2),
+        ("finish_run", "succeeded", 2, None),
+    ]
+
+
+def test_failed_run_is_recorded_and_error_propagates() -> None:
+    class BrokenCrawler(FakeCrawler):
+        async def extract_search_items(self, *args: Any, **kwargs: Any) -> AsyncIterator[ProductItem]:
+            raise RuntimeError("captcha")
+            yield  # pragma: no cover
+
+    sink = TrackingSink()
+    workflow = _workflow(BrokenCrawler([]), FakeVendorCrawler(), sink)
+
+    try:
+        asyncio.run(workflow.run(
+            ExtractionMode.PRODUCT, "seeds",
+            run_request=ExtractionRunRequest(marketplace="amazon"),
+        ))
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected RuntimeError")
+
+    assert sink.lifecycle[-1] == ("finish_run", "failed", 0, "RuntimeError: captcha")
+
+
+def test_run_tracking_is_skipped_without_a_request() -> None:
+    sink = TrackingSink()
+    asyncio.run(_workflow(FakeCrawler([]), FakeVendorCrawler(), sink).run(ExtractionMode.PRODUCT, "x"))
+    assert sink.lifecycle == []

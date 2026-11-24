@@ -1,6 +1,7 @@
 """Typer entry point: build dependencies and run one ``ExtractionWorkflow``."""
 
 import asyncio
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from playwright.async_api import async_playwright
 
 from crawlers import AmazonCrawler, AmazonVendorCrawler
 from include import LocalizedSanitization, configure_logging, load_environment
-from models import ProductItem
+from models import ExtractionRunRequest, ProductItem
 from models.config import MarketplaceConfig, ProductFilter
 from pipeline import ExtractionMode, ExtractionWorkflow, PostgreSQLSink, SQLFilter
 
@@ -34,6 +35,29 @@ def _configured_log_level() -> int:
     configured = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     level = getattr(logging, configured, logging.INFO)
     return level if isinstance(level, int) else logging.INFO
+
+
+def _run_request(
+    marketplace: str,
+    config: MarketplaceConfig,
+    extraction: ExtractionMode,
+    storefront_products: bool,
+    recursive_vendors: bool,
+    product_filter: ProductFilter,
+) -> ExtractionRunRequest:
+    """Describe this CLI job for the ``extraction_runs`` table."""
+    config_json = config.model_dump_json() if hasattr(config, "model_dump_json") else ""
+    return ExtractionRunRequest(
+        marketplace=marketplace,
+        source="cli",
+        config_hash=hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+        metadata={
+            "extraction": extraction.value,
+            "storefront_products": storefront_products,
+            "recursive_vendors": recursive_vendors,
+            "product_title_contains": product_filter.title_contains,
+        },
+    )
 
 
 async def _run_cli(
@@ -86,6 +110,10 @@ async def _run_cli(
                     sort_strategy=sort_strategy,
                     storefront_products=storefront_products,
                     recursive_vendors=recursive_vendors,
+                    run_request=_run_request(
+                        marketplace, config, extraction, storefront_products,
+                        recursive_vendors, product_filter,
+                    ),
                 )
                 logger.info("CLI workflow complete; beginning browser cleanup")
             finally:
