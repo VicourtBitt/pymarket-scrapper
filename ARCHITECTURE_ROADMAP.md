@@ -14,7 +14,7 @@ To maintain a scalable, enterprise-grade framework, all code must adhere to the 
 
 ## 2. Current State (What is already built)
 - **Models (`models/`):** Strict Pydantic contracts for `ProductItem`, `VendorProfile`, and `MarketplaceConfig` (with `extra='allow'` for dynamic YAML loading).
-- **Extraction (`crawlers/`):** `BaseCrawler` interface and `AmazonCrawler` implementation utilizing Playwright and asynchronous generators.
+- **Extraction (`crawlers/`):** `BaseCrawler` (search + product detail) and `BaseVendorCrawler` (seller profile + storefront catalog) contracts, with `AmazonCrawler` / `AmazonVendorCrawler` implementations and a marketplace registry (`crawlers/registry.py`).
 - **Transformation (`pipeline/`):** 
   - `Deduplicator`: In-memory set/dict to prevent redundant processing.
   - `SQLFilter`: DuckDB integration for in-memory batch filtering via SQL `WHERE` clauses.
@@ -28,9 +28,10 @@ To maintain a scalable, enterprise-grade framework, all code must adhere to the 
 SQLAlchemy declarative models now define extraction runs/searches, canonical
 marketplace-scoped products, and immutable product observations. Identifiers
 remain strings for compatibility with `ProductItem` and the existing sink;
-schema evolution is managed by the initial Alembic revision rather than
-`Base.metadata.create_all()`. Sink/run lifecycle integration is the next
-increment.
+schema evolution is managed by Alembic rather than
+`Base.metadata.create_all()`. **Run lifecycle (implemented):** `PostgreSQLSink`
+records each CLI job as an `ExtractionRun` with one `ExtractionSearch`, and
+every product loaded by the search pipeline as a `ProductObservation`.
 
 ### 3.1. Delegated Vendor Extraction & Hashmap Deduplication
 **Goal:** Extract vendor details without making duplicate HTTP requests for products sold by the same vendor.
@@ -39,9 +40,11 @@ increment.
     *   Implement an in-memory Hashmap (`vendor_cache = {}`) inside the orchestrator.
     *   **Flow:** Extract Product -> Check `vendor_id` in `vendor_cache`. If MISSING -> delegate `page` to `AmazonVendorCrawler.extract_profile(url)` -> UPSERT vendor -> Cache Vendor ID -> UPSERT Product.
 
-    > **Current implementation note:** Vendor extraction, external-link/external_id
-    > preservation, and vendor cache/persistence orchestration are intentionally
-    > deferred until the vendor model and extraction contract are complete.
+    > **Implemented:** `AmazonVendorCrawler` extracts vendor info and storefront
+    > catalogs; `pipeline.workflow.VendorResolver` holds the per-run vendor cache
+    > shared by every mode. Still open: populating `extracted_emails` /
+    > `extracted_phones` (e.g. via `RegexExtractor`) and the `VendorProfile`
+    > model, which is not yet used.
 
 ### 3.2. Formalize the Pipeline Interface
 **Goal:** Replace the manual chaining in `main.py` with a declarative pipeline engine.
@@ -49,6 +52,10 @@ increment.
     *   Create a `Pipeline` class in `pipeline/engine.py`.
     *   Allow adding stages: `pipeline.add_step(Deduplicator).add_step(SQLFilter).set_sink(PostgreSQLSink)`.
     *   Implement an `async def run(stream)` method to automatically pipe generators through the registered steps.
+
+    > **Implemented:** `Pipeline` accepts `Stage` objects or async-generator
+    > functions and returns `PipelineStats`; `ExtractionWorkflow` composes it
+    > for every CLI mode and `main.py` only wires dependencies.
 
 ---
 
@@ -61,12 +68,20 @@ increment.
     *   Define arguments: `--search`, `--limit`, `--marketplace` (e.g., "amazon"), `--sort-strategy` (e.g., "best_sellers").
     *   Map the `--marketplace` argument to `MarketplaceConfig.from_marketplace(name)` using the Factory Method pattern.
 
+    > **Implemented:** `--marketplace` loads `configs/<name>.yml`, and the YAML
+    > `marketplace` family selects the crawler classes from `crawlers.registry`.
+
 ### 4.2. Database Production Readiness
 **Goal:** Make the PostgreSQL persistence layer safe for production evolution.
 *   **Architecture:**
     *   Remove `Base.metadata.create_all()` from `db_sink.py`.
     *   Initialize **Alembic** (`alembic init`) to manage database schema migrations.
     *   Implement Docker Init Scripts (`db_init/init.sql`) to strictly define the `pymarket_scrapper` user role and database creation.
+
+    > **Implemented** as `db_init/01-create-app-role.sh` (a shell script so the
+    > password comes from `APP_DB_PASS` instead of being committed). Still open:
+    > `products.product_id` is the sole primary key and `vendors` has no
+    > marketplace column, so identical IDs from two marketplaces would collide.
 
 ---
 

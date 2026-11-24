@@ -3,12 +3,16 @@ Architecture and workflow
 
 The project separates extraction, transformation, and loading:
 
-#. ``MarketplaceConfig`` loads selectors, URLs, and query parameters from YAML.
-#. A crawler yields ``ProductItem`` models through an asynchronous iterator.
-#. ``main.run_amazon_workflow`` enriches each search product from its detail
-   page and resolves each vendor once using a per-run cache.
-#. ``Pipeline`` applies ``Deduplicator`` and ``SQLFilter`` stages in order.
-#. ``PostgreSQLSink`` upserts the filtered products and resolved vendors.
+#. ``MarketplaceConfig`` loads selectors, URLs, query parameters, locale and
+   browser settings from YAML; ``crawlers.registry`` picks the crawler pair.
+#. A ``BaseCrawler`` yields search ``ProductItem`` models through an
+   asynchronous iterator and fetches product detail pages. A separate
+   ``BaseVendorCrawler`` extracts seller profiles and storefront catalogs.
+#. ``pipeline.workflow.ExtractionWorkflow`` composes ``Pipeline`` stages
+   (title filter, ``Deduplicator``, detail enrichment, ``SQLFilter``) for the
+   selected mode, resolving each vendor once through ``VendorResolver``.
+#. ``PostgreSQLSink`` upserts products and vendors, and records the job as an
+   extraction run with one search and its product observations.
 #. Resolved vendor storefronts are scanned afterward and their catalog products
    are upserted without recursively re-entering the search workflow.
 

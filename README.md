@@ -8,31 +8,39 @@ is Amazon-focused and is not presented as production-ready.
 
 ## Capabilities
 
-- Async Playwright extraction for Amazon search results, product details,
-  vendors, and vendor catalogs.
-- YAML configuration for marketplace URLs, selectors, and sort values.
+- Async Playwright extraction for Amazon search results and product details
+  (`AmazonCrawler`) and for seller profiles and storefront catalogs
+  (`AmazonVendorCrawler`).
+- YAML configuration for marketplace URLs, selectors, sort values, number
+  locale, and browser context.
 - Pydantic models for extracted product and vendor data.
 - Streaming async pipeline stages for deduplication and DuckDB-backed SQL
   filtering.
 - SQLAlchemy persistence with PostgreSQL upserts through `PostgreSQLSink`.
-- An Alembic revision for extraction runs, searches, products, vendors, and
-  product observations.
+- Alembic migrations for extraction runs, searches, products, vendors, and
+  product observations; every CLI job is recorded as an extraction run.
 - Sphinx API and architecture documentation under `docs/`.
 
-Mercado Livre and the standalone vendor crawler interfaces are placeholders;
-they do not provide a complete live workflow yet.
+Mercado Livre crawlers are registered placeholders that raise
+`NotImplementedError`; they do not provide a live workflow yet.
 
 ## Architecture and workflow
 
-The current Amazon flow is:
+`main.py` only wires dependencies; `pipeline.workflow.ExtractionWorkflow`
+runs the job:
 
-1. Load and validate `configs/<marketplace>.yml`.
-2. Stream search results from `AmazonCrawler`.
-3. Fetch product details and resolve each vendor once per run using an
-   in-memory cache.
-4. Apply `Deduplicator` and `SQLFilter` through `Pipeline`.
-5. Upsert filtered products and resolved vendors with `PostgreSQLSink`.
-6. Optionally scan resolved vendor storefronts and upsert unique catalog products.
+1. Load and validate `configs/<marketplace>.yml`, then pick the crawler pair
+   for its `marketplace` family from `crawlers.registry`.
+2. Open an extraction run and search in the database (`PostgreSQLSink`).
+3. Stream search results from the product crawler through `Pipeline` stages:
+   title filter, `Deduplicator`, detail-page enrichment, and `SQLFilter`.
+   Detail and vendor pages use a second browser page so search pagination is
+   never navigated away.
+4. Resolve each vendor once per run through `VendorResolver` (shared by every
+   mode), upserting vendors and products and recording one observation per
+   loaded search product.
+5. Optionally scan resolved vendor storefronts and upsert unique catalog
+   products, then close the run with its counters.
 
 The crawler and pipeline stages use async iterators, so the complete result set
 does not need to be held in memory. See the [architecture guide](docs/architecture.rst)
@@ -42,12 +50,13 @@ and [API reference](docs/api.rst) for the module-level details.
 
 | Path | Purpose |
 | --- | --- |
-| `main.py` | Application wiring and the executable Amazon workflow |
-| `crawlers/` | Marketplace and vendor crawler interfaces and implementations |
-| `pipeline/` | Async pipeline stages and the PostgreSQL sink |
+| `main.py` | Typer CLI and dependency wiring |
+| `crawlers/` | Product/vendor crawler contracts, implementations, and the marketplace registry |
+| `pipeline/` | Pipeline engine, stages, workflow orchestration, normalization, and the PostgreSQL sink |
 | `models/` | Pydantic contracts, configuration loading, and SQLAlchemy models |
 | `configs/` | Marketplace YAML configuration, including Amazon selectors |
 | `alembic/` | Database migration configuration and revisions |
+| `db_init/` | PostgreSQL container init script creating the application role |
 | `tests/` | Unit and workflow tests |
 | `docs/` | Sphinx setup, architecture, setup, and API documentation |
 
@@ -100,8 +109,18 @@ environment variables that are already set.
 | `LOG_DIRECTORY` | `logs` | Directory used by application logging |
 | `LOG_LEVEL` | `INFO` | Python logging level used by the CLI, such as `DEBUG`, `INFO`, or `WARNING` |
 
-The current `main.py` workflow uses the search term `sementes para plantar`,
-requests up to 50 results, and opens Chromium with `headless=False`.
+Per-marketplace number formats and browser settings live in the YAML too:
+
+```yaml
+locale:
+  decimal_separator: ","
+  thousands_separator: "."
+  currency_fallback: BRL
+browser:
+  user_agent: "Mozilla/5.0 ..."
+  viewport_width: 1280
+  viewport_height: 720
+```
 
 ### Diagnostic logs
 
@@ -122,6 +141,13 @@ not written to the logs; marketplace page URLs may be included to identify the
 page where processing stopped.
 
 ## Database and migrations
+
+For local development, `docker compose up -d` starts PostgreSQL 16. On the
+first start (empty volume) `db_init/01-create-app-role.sh` creates the
+`APP_DB_USER` role (default `pymarket_scrapper`), a non-superuser that owns the
+`DB_NAME` database; point `DATABASE_URL` at that role. `DB_USER`/`DB_PASS` are
+the administrative superuser and are only needed for initialization. See
+`.env.example`.
 
 The persistence layer targets PostgreSQL through SQLAlchemy. Apply the checked-in
 Alembic revision after setting `DATABASE_URL` (or `DB_USER`, `DB_PASS`, and
@@ -164,8 +190,8 @@ python main.py --extraction all --search "garden seeds" --storefront-products
 python main.py --recursive-vendors --database-url "$DATABASE_URL"
 ```
 
-Unit tests can import `main.app` and workflow helpers without launching a
-browser or connecting to a database.
+Unit tests drive `ExtractionWorkflow` with fake crawlers and sinks, without
+launching a browser or connecting to a database.
 
 ## Test
 
@@ -195,9 +221,7 @@ to a database. The detailed guides are [Setup](docs/setup.rst),
 
 ## Current status and limitations
 
-This repository is an evolving POC. The Amazon path is the most complete live
-workflow, while Mercado Livre extraction, the standalone vendor crawler, a
-general CLI, and production hardening remain incomplete or planned. The
-roadmap also calls out future retry/anti-bot middleware and further persistence
-lifecycle integration. Marketplace selectors can change independently of this
+This repository is an evolving POC. The Amazon path is the only live
+workflow; Mercado Livre extraction and production hardening (retry/anti-bot
+middleware, proxy rotation) remain planned. Marketplace selectors can change independently of this
 codebase, so live extraction may require YAML updates.

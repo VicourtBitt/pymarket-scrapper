@@ -4,9 +4,12 @@ API reference
 Workflow
 --------
 
-.. automodule:: main
-   :members: run_amazon_workflow
+.. automodule:: pipeline.workflow
+   :members:
    :show-inheritance:
+
+.. automodule:: pipeline.normalization
+   :members:
 
 Crawlers
 --------
@@ -18,6 +21,13 @@ Crawlers
 .. automodule:: crawlers.amazon
    :members:
    :show-inheritance:
+
+.. automodule:: crawlers.amazon_vendor
+   :members:
+   :show-inheritance:
+
+.. automodule:: crawlers.registry
+   :members:
 
 Pipeline
 --------
