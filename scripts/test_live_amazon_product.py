@@ -87,7 +87,8 @@ def product_urls(args: argparse.Namespace) -> list[tuple[str, str]]:
                 statement = (
                     statement.join(
                         ProductObservation,
-                        ProductObservation.product_id == ProductRecord.product_id,
+                        (ProductObservation.marketplace == ProductRecord.marketplace)
+                        & (ProductObservation.product_id == ProductRecord.product_id),
                     )
                     .join(
                         ExtractionSearch,

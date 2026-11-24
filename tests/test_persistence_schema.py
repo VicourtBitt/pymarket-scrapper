@@ -79,10 +79,76 @@ def test_json_defaults_are_not_shared_mutable_objects() -> None:
 def test_foreign_keys_have_explicit_ondelete_actions() -> None:
     searches = ExtractionSearch.__table__
     observations = ProductObservation.__table__
+    products = ProductRecord.__table__
+    composite = {
+        constraint.name: constraint
+        for table in (products, observations)
+        for constraint in table.foreign_key_constraints
+        if constraint.name
+    }
     assert searches.c.run_id.foreign_keys.pop().ondelete == "CASCADE"
-    assert observations.c.product_id.foreign_keys.pop().ondelete == "CASCADE"
     assert observations.c.search_id.foreign_keys.pop().ondelete == "CASCADE"
-    assert observations.c.vendor_id.foreign_keys.pop().ondelete == "SET NULL"
+    assert composite["fk_observations_product"].ondelete == "CASCADE"
+    # Composite vendor keys cannot SET NULL without nulling marketplace.
+    assert composite["fk_products_vendor"].ondelete is None
+    assert composite["fk_observations_vendor"].ondelete is None
+    for name in ("fk_products_vendor", "fk_observations_product", "fk_observations_vendor"):
+        assert composite[name].column_keys[0] == "marketplace"
+
+
+def test_identities_are_scoped_to_the_marketplace() -> None:
+    assert [c.name for c in ProductRecord.__table__.primary_key] == ["marketplace", "product_id"]
+    assert [c.name for c in VendorRecord.__table__.primary_key] == ["marketplace", "vendor_id"]
+    assert ProductObservation.__table__.c.marketplace.nullable is False
+
+
+def _sqlite_session() -> Session:
+    engine = create_engine("sqlite://")
+    event.listen(engine, "connect", lambda dbapi_connection, _: dbapi_connection.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    return Session(engine)
+
+
+def test_same_ids_coexist_in_two_marketplaces_in_offline_sqlite() -> None:
+    with _sqlite_session() as session:
+        for marketplace in ("amazon_br", "amazon_us"):
+            session.add(VendorRecord(marketplace=marketplace, vendor_id="S1", name=marketplace))
+            session.add(ProductRecord(
+                marketplace=marketplace, product_id="B000", title=marketplace, vendor_id="S1",
+            ))
+        session.commit()
+        rows = session.query(ProductRecord.marketplace, ProductRecord.vendor_id).order_by(
+            ProductRecord.marketplace
+        ).all()
+        assert rows == [("amazon_br", "S1"), ("amazon_us", "S1")]
+
+
+def test_product_cannot_reference_another_marketplaces_vendor_in_offline_sqlite() -> None:
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    with _sqlite_session() as session:
+        session.add(VendorRecord(marketplace="amazon_br", vendor_id="S1", name="BR"))
+        session.commit()
+        session.add(ProductRecord(
+            marketplace="amazon_us", product_id="B000", title="US", vendor_id="S1",
+        ))
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_marketplace_identity_migration_is_chained_and_guards_downgrade() -> None:
+    migration = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0004_marketplace_scoped_identity.py"
+    ).read_text()
+    assert 'revision: str = "0004_marketplace_scoped_identity"' in migration
+    assert 'down_revision: Optional[str] = "0003_add_vendor_storefront_url"' in migration
+    assert 'op.create_primary_key("products_pkey", "products", ["marketplace", "product_id"])' in migration
+    assert 'op.create_primary_key("vendors_pkey", "vendors", ["marketplace", "vendor_id"])' in migration
+    assert "Cannot downgrade" in migration
 
 
 def test_numeric_columns_preserve_decimal_contract() -> None:

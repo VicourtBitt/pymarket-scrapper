@@ -58,6 +58,7 @@ def test_load_product_keeps_marketplace_and_sql_null_url() -> None:
 
     compiled = statements[0].compile(dialect=postgresql.dialect())
     assert "vendor_id = coalesce(excluded.vendor_id, products.vendor_id)" in str(compiled)
+    assert "ON CONFLICT (marketplace, product_id)" in str(compiled)
     assert compiled.params["marketplace"] == "amazon"
     assert compiled.params["url"] is None
     assert compiled.params["price"] == Decimal("4.2000")
@@ -84,6 +85,8 @@ def test_load_vendor_upsert_persists_cnpj_storefront_and_accepts_missing_fields(
     assert supplied.params["storefront_url"] == "https://example.test/store"
     assert legacy.params["cnpj"] is None
     assert legacy.params["storefront_url"] is None
+    assert supplied.params["marketplace"] == "amazon"
+    assert "ON CONFLICT (marketplace, vendor_id)" in str(supplied)
     assert 'cnpj = excluded.cnpj' in str(supplied)
     assert 'storefront_url = excluded.storefront_url' in str(supplied)
 
@@ -138,6 +141,7 @@ def test_products_are_observed_only_while_a_search_is_open() -> None:
     first_observation = _compiled(statements[4]).params
     second_observation = _compiled(statements[6]).params
     assert first_observation["search_id"] == search_id
+    assert first_observation["marketplace"] == "amazon"
     assert (first_observation["position"], second_observation["position"]) == (1, 2)
     assert first_observation["row_hash"] == observation_hash(PRODUCT)
     assert "ON CONFLICT ON CONSTRAINT uq_observation_search_product_hash DO NOTHING" in str(

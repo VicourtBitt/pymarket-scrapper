@@ -102,6 +102,7 @@ class PostgreSQLSink:
 
         # 2. Build the UPSERT statement (Insert on Conflict Do Update)
         stmt = insert(VendorRecord).values(
+            marketplace=self.marketplace,
             vendor_id=vendor_data['vendor_id'],
             name=vendor_data['name'],
             url=vendor_data.get("url"),
@@ -116,7 +117,7 @@ class PostgreSQLSink:
         # Update all fields EXCEPT the primary key if the vendor already exists
         update_dict = {c.name: c for c in stmt.excluded if not c.primary_key}
         upsert_stmt = stmt.on_conflict_do_update(
-            index_elements=['vendor_id'],
+            index_elements=['marketplace', 'vendor_id'],
             set_=update_dict
         )
 
@@ -153,14 +154,14 @@ class PostgreSQLSink:
             metadata_blob=product_data.get('metadata', {})
         )
 
-        update_dict = {c.name: c for c in stmt.excluded if c.name != "product_id"}
+        update_dict = {c.name: c for c in stmt.excluded if not c.primary_key}
         # A run that could not resolve the vendor (search-only mode, a failed
         # vendor page) must not erase a vendor link stored by an earlier run.
         update_dict["vendor_id"] = func.coalesce(
             stmt.excluded.vendor_id, ProductRecord.__table__.c.vendor_id
         )
         upsert_stmt = stmt.on_conflict_do_update(
-            index_elements=['product_id'],
+            index_elements=['marketplace', 'product_id'],
             set_=update_dict
         )
 
@@ -182,6 +183,7 @@ class PostgreSQLSink:
         return insert(ProductObservation).values(
             observation_id=new_id(),
             search_id=self.search_id,
+            marketplace=self.marketplace,
             product_id=product_data["product_id"],
             observed_at=utc_now(),
             title=product_data.get("title"),
@@ -340,7 +342,10 @@ class PostgreSQLSink:
             try:
                 session.execute(
                     update(ProductRecord)
-                    .where(ProductRecord.product_id == product_id)
+                    .where(
+                        ProductRecord.marketplace == self.marketplace,
+                        ProductRecord.product_id == product_id,
+                    )
                     .values(vendor_id=vendor_id)
                 )
                 session.commit()
