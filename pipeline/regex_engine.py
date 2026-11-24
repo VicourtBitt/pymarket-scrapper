@@ -19,7 +19,9 @@ class RegexExtractor:
         for field, pattern in self.rules.items():
             # Whole-match strings (even with capture groups), deduplicated
             # in first-seen order so ETL output is deterministic.
-            matches = list(dict.fromkeys(m.group(0) for m in pattern.finditer(text)))
+            matches = list(dict.fromkeys(
+                m.group(0) for m in pattern.finditer(text) if m.group(0)
+            ))
             if matches:
                 results[field] = matches
         return results

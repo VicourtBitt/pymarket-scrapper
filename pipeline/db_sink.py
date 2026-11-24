@@ -4,7 +4,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any, Callable, Dict, Optional
 
-from sqlalchemy import create_engine, select, update
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 from models import (
@@ -154,6 +154,11 @@ class PostgreSQLSink:
         )
 
         update_dict = {c.name: c for c in stmt.excluded if c.name != "product_id"}
+        # A run that could not resolve the vendor (search-only mode, a failed
+        # vendor page) must not erase a vendor link stored by an earlier run.
+        update_dict["vendor_id"] = func.coalesce(
+            stmt.excluded.vendor_id, ProductRecord.__table__.c.vendor_id
+        )
         upsert_stmt = stmt.on_conflict_do_update(
             index_elements=['product_id'],
             set_=update_dict

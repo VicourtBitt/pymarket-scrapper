@@ -440,3 +440,18 @@ def test_detail_requests_use_the_detail_crawler_not_the_search_crawler() -> None
 
     assert search_crawler.product_urls == []
     assert detail_crawler.product_urls == ["https://example.test/p-1"]
+
+
+def test_unresolved_vendor_also_clears_a_search_card_vendor_id() -> None:
+    class BrokenVendorCrawler(FakeVendorCrawler):
+        async def extract_vendor_info(self, vendor_url: str) -> dict[str, Any]:
+            raise RuntimeError("captcha")
+
+    search = _product("p-1").model_copy(update={"vendor_id": "from-search-card"})
+    sink = ForeignKeySink()
+
+    asyncio.run(_workflow(FakeCrawler([search]), BrokenVendorCrawler(), sink).enrich_and_persist(
+        FakeCrawler([search]).extract_search_items()
+    ))
+
+    assert [(kind, data["vendor_id"]) for kind, data in sink.events] == [("product", None)]

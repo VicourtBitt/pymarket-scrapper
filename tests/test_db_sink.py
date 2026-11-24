@@ -57,6 +57,7 @@ def test_load_product_keeps_marketplace_and_sql_null_url() -> None:
     )
 
     compiled = statements[0].compile(dialect=postgresql.dialect())
+    assert "vendor_id = coalesce(excluded.vendor_id, products.vendor_id)" in str(compiled)
     assert compiled.params["marketplace"] == "amazon"
     assert compiled.params["url"] is None
     assert compiled.params["price"] == Decimal("4.2000")

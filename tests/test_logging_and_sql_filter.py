@@ -114,3 +114,4 @@ def test_regex_extractor_returns_whole_matches_in_first_seen_order() -> None:
         "emails": ["b@x.com", "a@y.com"],
     }
     assert extractor.extract("nothing here") == {}
+    assert RegexExtractor({"digits": r"\d*"}).extract("tel 31 e 31") == {"digits": ["31"]}

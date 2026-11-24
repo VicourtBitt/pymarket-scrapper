@@ -291,8 +291,11 @@ class ExtractionWorkflow:
             )
             # products.vendor_id is a foreign key: only reference a vendor row
             # that exists, otherwise the product upsert would fail the run.
-            details = {**details, "vendor_id": vendor["vendor_id"] if vendor else None}
-            yield merge_product_details(product, details)
+            vendor_id = vendor["vendor_id"] if vendor else None
+            yield merge_product_details(
+                product.model_copy(update={"vendor_id": vendor_id}),
+                {**details, "vendor_id": vendor_id},
+            )
 
     async def _resolve_only(self, stream: AsyncIterator[ProductItem]) -> AsyncIterator[ProductItem]:
         async for product in stream:
