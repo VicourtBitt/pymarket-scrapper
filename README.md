@@ -157,8 +157,20 @@ Alembic revision after setting `DATABASE_URL` (or `DB_USER`, `DB_PASS`, and
 alembic upgrade head
 ```
 
-The initial revision creates vendor, product, extraction-run, extraction-search,
-and product-observation tables. Review `alembic.ini` and `alembic/env.py` for
+The revisions create vendor, product, extraction-run, extraction-search,
+and product-observation tables. Products and vendors are identified per
+marketplace configuration (`(marketplace, product_id)` and
+`(marketplace, vendor_id)`), so `amazon_br.yml` and `amazon_us.yml` can store
+the same ASIN or seller ID independently.
+
+Upgrading an existing database to revision `0004_marketplace_scoped_identity`
+assigns each vendor the marketplace of the products that reference it (copying
+vendors shared by several marketplaces). If unreferenced vendors exist and the
+database holds more than one marketplace, name their marketplace explicitly:
+
+```bash
+alembic -x default_marketplace=amazon upgrade head
+``` Review `alembic.ini` and `alembic/env.py` for
 the repository's migration connection behavior before running it against a
 shared database.
 

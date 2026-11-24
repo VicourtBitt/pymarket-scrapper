@@ -11,7 +11,16 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    JSON,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -30,8 +39,11 @@ class Base(DeclarativeBase):
 
 
 class VendorRecord(Base):
+    """Marketplace seller; seller IDs are only unique within a marketplace."""
+
     __tablename__ = "vendors"
 
+    marketplace: Mapped[str] = mapped_column(String(100), primary_key=True)
     vendor_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[Optional[str]] = mapped_column(String(2048))
@@ -42,7 +54,9 @@ class VendorRecord(Base):
     storefront_url: Mapped[Optional[str]] = mapped_column(String(2048))
     metadata_blob: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
-    products: Mapped[List["ProductRecord"]] = relationship(back_populates="vendor")
+    products: Mapped[List["ProductRecord"]] = relationship(
+        back_populates="vendor", overlaps="observations,product"
+    )
 
 
 class ExtractionRun(Base):
@@ -89,63 +103,86 @@ class ExtractionSearch(Base):
 
 
 class ProductRecord(Base):
-    """Canonical product table, retaining the legacy ``product_id`` API."""
+    """Canonical product, identified by ``(marketplace, product_id)``.
+
+    Marketplace IDs (for example ASINs shared by several Amazon sites) are only
+    unique within one marketplace configuration.
+    """
 
     __tablename__ = "products"
     __table_args__ = (
         UniqueConstraint("marketplace", "external_product_id", name="uq_products_marketplace_external_id"),
         Index("ix_products_marketplace_title", "marketplace", "title"),
-        Index("ix_products_vendor_id", "vendor_id"),
+        Index("ix_products_marketplace_vendor_id", "marketplace", "vendor_id"),
+        # NO ACTION: a vendor that products reference cannot be deleted.
+        # (A column-list SET NULL needs PostgreSQL 15+ and is not portable.)
+        ForeignKeyConstraint(
+            ["marketplace", "vendor_id"],
+            ["vendors.marketplace", "vendors.vendor_id"],
+            name="fk_products_vendor",
+        ),
     )
 
-    product_id: Mapped[str] = mapped_column(String(255), primary_key=True, index=True)
     # Marketplace identity is supplied by the sink; there is no safe default.
-    marketplace: Mapped[str] = mapped_column(String(100), nullable=False)
+    marketplace: Mapped[str] = mapped_column(String(100), primary_key=True)
+    product_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     external_product_id: Mapped[Optional[str]] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(1000), nullable=False)
     url: Mapped[Optional[str]] = mapped_column(String(2048))
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4))
     currency: Mapped[Optional[str]] = mapped_column(String(12))
-    vendor_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("vendors.vendor_id", ondelete="SET NULL")
-    )
+    vendor_id: Mapped[Optional[str]] = mapped_column(String(255))
     metadata_blob: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
 
-    vendor: Mapped[Optional[VendorRecord]] = relationship(back_populates="products")
-    observations: Mapped[List["ProductObservation"]] = relationship(back_populates="product")
+    vendor: Mapped[Optional[VendorRecord]] = relationship(
+        back_populates="products", overlaps="observations,product"
+    )
+    observations: Mapped[List["ProductObservation"]] = relationship(
+        back_populates="product", overlaps="products,vendor"
+    )
 
 
 class ProductObservation(Base):
     __tablename__ = "product_observations"
     __table_args__ = (
         UniqueConstraint("search_id", "product_id", "row_hash", name="uq_observation_search_product_hash"),
-        Index("ix_observations_product_observed_at", "product_id", "observed_at"),
+        Index("ix_observations_product_observed_at", "marketplace", "product_id", "observed_at"),
         Index("ix_observations_search_position", "search_id", "position"),
+        ForeignKeyConstraint(
+            ["marketplace", "product_id"],
+            ["products.marketplace", "products.product_id"],
+            ondelete="CASCADE",
+            name="fk_observations_product",
+        ),
+        ForeignKeyConstraint(
+            ["marketplace", "vendor_id"],
+            ["vendors.marketplace", "vendors.vendor_id"],
+            name="fk_observations_vendor",
+        ),
     )
 
     observation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     search_id: Mapped[str] = mapped_column(
         ForeignKey("extraction_searches.search_id", ondelete="CASCADE"), nullable=False
     )
-    product_id: Mapped[str] = mapped_column(
-        ForeignKey("products.product_id", ondelete="CASCADE"), nullable=False
-    )
+    marketplace: Mapped[str] = mapped_column(String(100), nullable=False)
+    product_id: Mapped[str] = mapped_column(String(255), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(1000))
     url: Mapped[Optional[str]] = mapped_column(String(2048))
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4))
     currency: Mapped[Optional[str]] = mapped_column(String(12))
-    vendor_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("vendors.vendor_id", ondelete="SET NULL")
-    )
+    vendor_id: Mapped[Optional[str]] = mapped_column(String(255))
     position: Mapped[Optional[int]] = mapped_column()
     raw_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     row_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
     search: Mapped[ExtractionSearch] = relationship(back_populates="observations")
-    product: Mapped[ProductRecord] = relationship(back_populates="observations")
-    vendor: Mapped[Optional[VendorRecord]] = relationship()
+    product: Mapped[ProductRecord] = relationship(
+        back_populates="observations", overlaps="vendor"
+    )
+    vendor: Mapped[Optional[VendorRecord]] = relationship(overlaps="product")

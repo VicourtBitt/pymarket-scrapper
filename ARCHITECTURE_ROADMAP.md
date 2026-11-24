@@ -79,9 +79,10 @@ every product loaded by the search pipeline as a `ProductObservation`.
     *   Implement Docker Init Scripts (`db_init/init.sql`) to strictly define the `pymarket_scrapper` user role and database creation.
 
     > **Implemented** as `db_init/01-create-app-role.sh` (a shell script so the
-    > password comes from `APP_DB_PASS` instead of being committed). Still open:
-    > `products.product_id` is the sole primary key and `vendors` has no
-    > marketplace column, so identical IDs from two marketplaces would collide.
+    > password comes from `APP_DB_PASS` instead of being committed).
+    > Product and vendor identities are scoped to the marketplace
+    > (`(marketplace, product_id)` / `(marketplace, vendor_id)`, migration 0004),
+    > so several marketplace configurations can share IDs such as ASINs.
 
 ---
 
